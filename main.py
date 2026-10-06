@@ -3,7 +3,7 @@ import os
 import random
 
 class Workspace:
-    def __init__(self, name:str="Project-id"):
+    def __init__(self, name : str="Project-id"):
         self.proj_name = name
         self.create_date = time.time()
         self.data = {}
