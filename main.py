@@ -24,11 +24,12 @@ class Workspace:
             return None
         # Par example un max des task = 100 -> min_id = 100/10 = 10 et max_id = 100-1 = 99 donc le random
         # range va selectionner entre 10 et 99 et on aura toujours un nombre de digits egal
-        max_task_id, min_task_id = self.max_tasks-1, self.max_tasks / 10
-        rnd_task_id = min_task_id
-        while rnd_task_id in self.task_ids:
-            rnd_task_id = random.randrange(min_task_id, max_task_id+1)
-        return rnd_task_id
+        max_task_id, min_task_id = self.max_tasks-1, self.max_tasks // 10
+        while True:
+            rnd_task_id = random.randint(min_task_id, max_task_id)
+            if rnd_task_id not in self.task_ids:
+                self.task_ids.add(rnd_task_id)
+                return rnd_task_id
 
 
 
