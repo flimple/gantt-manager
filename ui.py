@@ -31,5 +31,6 @@ def get_recent_projects() -> tk.Tk:
 
     recent_prjs_frame = tk.Frame(parent_frame)
     recent_prjs_frame.pack(side=tk.LEFT, padx=10)
+    root.attributes("-topmost", True)
 
     return root
