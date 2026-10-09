@@ -1,6 +1,8 @@
 import time
 import os
 import random
+import ui
+import asyncio
 
 class Workspace:
     def __init__(self, name : str="Project-id"):
@@ -8,13 +10,14 @@ class Workspace:
         self.create_date = time.time()
         self.data = {}
         self.last_selected_task = None
-        self.task_ids : set = {}
+        self.task_ids : set = set()
         self.max_tasks = 100
 
     @property
     def can_add_task(self) -> bool:
-        return True if len(self.task_ids) < 100 else False
+        return True if len(self.task_ids) < (self.max_tasks*9)/10 else False
 
+    # Choix de designe pure
     @property
     def get_new_task_id(self) -> int | None:
         if not self.can_add_task:
@@ -41,4 +44,12 @@ class Workspace:
     def add_milestone(self):
         pass
 
-    
+def main():
+    root = ui.get_main_page()
+    prj = ui.get_recent_projects()
+
+    root.mainloop()
+    prj.mainloop()
+
+if __name__ == "__main__":
+    main()
