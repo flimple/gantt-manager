@@ -2,6 +2,7 @@ import random
 import os
 import time
 import asyncio
+import libs.data_manager as dataT
 
 class Workspace:
     def __init__(self, name : str="Project-id"):
@@ -43,3 +44,7 @@ class Workspace:
 
     def add_milestone(self):
         pass
+
+
+def load_workspaces():
+    pass
