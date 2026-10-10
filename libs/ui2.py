@@ -34,11 +34,10 @@ def get_recent_projects() -> ctk.CTk:
 
     recent_prjs_frame = ctk.CTkFrame(parent_frame, bg_color="transparent", fg_color=("#FFFFFF", "#1C222B"), border_width=0)
     recent_prjs_frame.pack(fill="both", expand=True, side=ctk.LEFT, padx=10)
-    scroll_rect = uiTool.create_viewport(recent_prjs_frame)
-    for i in range(30):
-        item = ctk.CTkButton(scroll_rect, text=f"Project {i+1}")
-        item.pack(fill="x", padx=10, pady=5)
+    prjs_rect = uiTool.create_viewport(recent_prjs_frame)
 
+    
+    
     app.attributes("-topmost", True)
 
     return app
