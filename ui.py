@@ -1,4 +1,5 @@
 import tkinter as tk
+from datetime import date, timedelta
 from tkinter import ttk
 
 LIST_BG = "lightgray"
@@ -8,9 +9,17 @@ LIST_HOVER_BG = "gray75"
 PX_PER_DAY = 30
 ROW_HEIGHT = 30          # Hauteur d'une ligne de tâches dans un groupe
 ROW_PADDING = 4          # Espace vertical entre la barre de tâche et le bord de sa ligne
-GROUP_LABEL_WIDTH = 140  # Colonne de gauche avec le nom du groupe
+SIDEBAR_WIDTH = 160      # Colonne de gauche avec les noms des groupes
+HEADER_ROW_HEIGHT = 22   # En-tête des dates : une ligne pour les mois, une pour les jours
+HEADER_HEIGHT = 2 * HEADER_ROW_HEIGHT
+EXTRA_DAYS = 10          # Jours affichés en plus après la dernière tâche
+LINE_LENGTH = 100000     # Longueur des lignes de grille/séparateurs (plus grand que tout planning)
 GANTT_BG = "white"
 GROUP_BG = "gray95"
+HEADER_BG = "white"
+GROUP_SEPARATOR = "gray75"
+GRID_COLOR = "gray88"
+WEEKEND_BG = "gray96"
 SELECTED_BORDER = "black"     # Bordure de la tâche sélectionnée
 DRAG_PLACEHOLDER = "gray80"   # Couleur de la tâche d'origine pendant un drag
 RESIZE_EDGE = 6               # Zone (px) sur les bords d'une tâche sélectionnée pour changer sa durée
@@ -51,17 +60,24 @@ def fill_recent_projects(frame:tk.Frame, projects:list):
 
 
 class GanttView:
-    # Viewport -> groupe (catégorie) -> tâches.
-    # Chaque méthode ne touche que le widget concerné : jamais de redessin complet.
+    # 3 canvas qui scrollent ensemble :
+    #   header  (en haut)  : mois + numéros des jours, suit le scroll horizontal
+    #   sidebar (à gauche) : noms des groupes, suit le scroll vertical
+    #   body    (centre)   : grille des jours + tâches (des widgets posés sur le canvas)
+    # Chaque méthode ne touche que les éléments concernés : jamais de redessin complet des tâches.
 
-    def __init__(self, viewport:tk.Frame):
-        self.viewport = viewport
-        self.groups = {}  # group_id -> {"frame", "lane", "rows": [[task_id, ...], ...]}
-        self.tasks = {}   # task_id -> {"widget", "label", "group_id", "name", "color", "start", "length", "row"}
+    def __init__(self, body:tk.Canvas, sidebar:tk.Canvas, header:tk.Canvas, start_date:date=None):
+        self.body, self.sidebar, self.header = body, sidebar, header
+        self.start_date = start_date or date.today()  # Date affichée pour le jour 0 (juste de l'affichage)
+        self.groups = {}       # group_id -> {"name", "tag", "rows": [[task_id, ...], ...], "y", "height"}
+        self.group_order = []  # Ordre d'affichage des groupes, de haut en bas
+        self.tasks = {}        # task_id -> {"item", "widget", "label", "group_id", "name", "color", "start", "length", "row"}
         self.total_days = 0
-        self.min_width = 0  # Largeur visible du canvas : le Gantt ne sera jamais plus étroit
+        self.min_width = 0     # Largeur visible du body : la grille la remplit toujours
         self.selected = None
-        self._drag = None  # Infos du drag en cours (None quand on ne drag pas)
+        self._drag = None      # Infos du drag en cours (None quand on ne drag pas)
+        self._drawn_width = None
+        self._next_tag = 0
 
         # Callbacks pour brancher la logique plus tard (chacun reçoit des ids, pas des widgets)
         self.on_select = None             # on_select(task_id ou None)
@@ -69,40 +85,45 @@ class GanttView:
         self.on_task_resized = None       # on_task_resized(task_id, start, length) après avoir tiré un bord
         self.on_task_right_click = None   # on_task_right_click(task_id)
 
-        # Cadre invisible qui fixe la largeur du viewport : tous les groupes s'étirent dessus,
-        # donc élargir le planning = changer la largeur de ce seul widget
-        self.width_spacer = tk.Frame(viewport, height=0, width=GROUP_LABEL_WIDTH)
-        self.width_spacer.pack(side=tk.BOTTOM, anchor="w")
+        body.bind("<Button-1>", lambda e: self.select_task(None))  # Clic dans le vide = désélectionner
+        self._on_width_change()
 
     # ---------- Groupes ----------
 
     def add_group(self, group_id, name:str):
-        frame = tk.Frame(self.viewport, bg=GROUP_BG, highlightthickness=1, highlightbackground="gray75")
-        frame.pack(fill="x", pady=(0, 2))  # pack l'ajoute en bas, sans bouger les autres groupes
+        # Tag interne (g0, g1...) : les ids peuvent contenir des espaces, pas les tags du canvas
+        tag = f"g{self._next_tag}"
+        self._next_tag += 1
+        y = self._content_height()
+        self.groups[group_id] = {"name": name, "tag": tag, "rows": [], "y": y, "height": ROW_HEIGHT}
+        self.group_order.append(group_id)
 
-        label = tk.Label(frame, text=name, bg=GROUP_BG, anchor="nw", padx=8, pady=6)
-        label.place(x=0, y=0, width=GROUP_LABEL_WIDTH, relheight=1)
-
-        # Zone où les tâches sont placées avec place(x=...)
-        lane = tk.Frame(frame, bg=GANTT_BG)
-        lane.place(x=GROUP_LABEL_WIDTH, y=0, relwidth=1, width=-GROUP_LABEL_WIDTH, relheight=1)
-        lane.bind("<Button-1>", lambda e: self.select_task(None))  # Clic dans le vide = désélectionner
-
-        self.groups[group_id] = {"frame": frame, "lane": lane, "rows": []}
-        self._resize_group(group_id)
+        # Ligne de séparation sous le groupe (très longue : pas besoin de la rallonger plus tard)
+        self.body.create_line(0, y + ROW_HEIGHT, LINE_LENGTH, y + ROW_HEIGHT, fill=GROUP_SEPARATOR,
+                              tags=(tag, tag + "_sep", "separator"))
+        self.sidebar.create_line(0, y + ROW_HEIGHT, SIDEBAR_WIDTH, y + ROW_HEIGHT, fill=GROUP_SEPARATOR,
+                                 tags=(tag, tag + "_sep"))
+        self.sidebar.create_text(10, y + ROW_HEIGHT // 2, text=name, anchor="w", font=("Segoe UI", 9), tags=(tag,))
+        self._update_scrollregion()
 
     def remove_group(self, group_id):
+        group = self.groups[group_id]
         for task_id in [t for t, task in self.tasks.items() if task["group_id"] == group_id]:
             if self.selected == task_id:
                 self.select_task(None)
-            del self.tasks[task_id]
-        self.groups.pop(group_id)["frame"].destroy()
+            self.tasks.pop(task_id)["widget"].destroy()
+        self.body.delete(group["tag"])
+        self.sidebar.delete(group["tag"])
+        self._shift_groups_after(group_id, -group["height"])
+        self.group_order.remove(group_id)
+        del self.groups[group_id]
+        self._update_scrollregion()
 
     # ---------- Tâches ----------
 
     def add_task(self, group_id, task_id, name:str, start:int, length:int, color:str="steelblue"):
-        # start et length sont en jours (colonnes), pas en vraies dates
-        self.tasks[task_id] = {"widget": None, "label": None, "group_id": group_id, "name": name,
+        # start et length sont en jours (colonnes) ; le jour 0 correspond à start_date
+        self.tasks[task_id] = {"item": None, "widget": None, "label": None, "group_id": group_id, "name": name,
                                "color": color, "start": start, "length": length, "row": None}
         self._make_task_widget(task_id)
         self._put_in_free_row(task_id)
@@ -116,10 +137,10 @@ class GanttView:
         if length is not None:
             task["length"] = length
         if group_id is not None and group_id != old_group:
-            # tkinter ne peut pas changer le parent d'un widget : on recrée juste celui-ci
-            task["widget"].destroy()
+            # Tout est dans le même canvas : on change juste le tag du groupe, pas besoin de recréer le widget
+            self.body.dtag(task["item"], self.groups[old_group]["tag"])
+            self.body.addtag_withtag(self.groups[group_id]["tag"], task["item"])
             task["group_id"] = group_id
-            self._make_task_widget(task_id)
         self._put_in_free_row(task_id)
         self._extend_days(task["start"] + task["length"])
         self._shrink_group(old_group)
@@ -136,7 +157,9 @@ class GanttView:
             self.select_task(None)
         group_id = self.tasks[task_id]["group_id"]
         self._take_out_of_row(task_id)
-        self.tasks.pop(task_id)["widget"].destroy()
+        task = self.tasks.pop(task_id)
+        self.body.delete(task["item"])
+        task["widget"].destroy()
         self._shrink_group(group_id)
 
     # ---------- Sélection ----------
@@ -159,6 +182,11 @@ class GanttView:
         task["widget"].configure(highlightbackground=border, highlightcolor=border)
 
     # ---------- Drag & drop ----------
+
+    def _canvas_xy(self, event):
+        # Position de la souris dans le canvas (en tenant compte du scroll)
+        return (self.body.canvasx(event.x_root - self.body.winfo_rootx()),
+                self.body.canvasy(event.y_root - self.body.winfo_rooty()))
 
     def _on_press(self, event, task_id):
         # Le bord est testé AVANT de sélectionner : on ne redimensionne qu'une tâche déjà sélectionnée
@@ -184,46 +212,46 @@ class GanttView:
             # Petit seuil pour qu'un simple clic ne soit pas pris pour un drag
             if abs(event.x_root - drag["x0"]) < 4 and abs(event.y_root - drag["y0"]) < 4:
                 return
-            # Le "fantôme" vit dans le viewport (parent commun de tous les groupes),
-            # donc il peut passer d'un groupe à l'autre
-            ghost = tk.Frame(self.viewport, bg=task["color"], highlightthickness=2,
+            # Le "fantôme" suit la souris ; la tâche d'origine reste grisée à sa place
+            ghost = tk.Frame(self.body, bg=task["color"], highlightthickness=2,
                              highlightbackground=SELECTED_BORDER, highlightcolor=SELECTED_BORDER)
             tk.Label(ghost, text=task["name"], bg=task["color"], fg="white", anchor="w", padx=4).pack(fill="both", expand=True)
             drag["ghost"] = ghost
-            # La tâche d'origine reste à sa place mais grisée, pour voir d'où elle part
+            drag["ghost_item"] = self.body.create_window(0, 0, window=ghost, anchor="nw",
+                                                         width=task["length"] * PX_PER_DAY,
+                                                         height=ROW_HEIGHT - 2 * ROW_PADDING)
             task["widget"].configure(bg=DRAG_PLACEHOLDER)
             task["label"].configure(bg=DRAG_PLACEHOLDER, fg="gray40")
 
-        x = event.x_root - self.viewport.winfo_rootx() - drag["offset_x"]
-        y = event.y_root - self.viewport.winfo_rooty() - drag["offset_y"]
+        x, y = self._canvas_xy(event)
         # Horizontal : on aimante sur les jours. Vertical : suit la souris librement
-        drag["start"] = max(0, round((x - GROUP_LABEL_WIDTH) / PX_PER_DAY))
-        drag["group_id"] = self._group_at(event.y_root) or task["group_id"]
-        drag["ghost"].place(x=GROUP_LABEL_WIDTH + drag["start"] * PX_PER_DAY, y=y,
-                            width=task["length"] * PX_PER_DAY, height=ROW_HEIGHT - 2 * ROW_PADDING)
+        drag["start"] = max(0, round((x - drag["offset_x"]) / PX_PER_DAY))
+        drag["group_id"] = self._group_at(y) or task["group_id"]
+        self.body.coords(drag["ghost_item"], drag["start"] * PX_PER_DAY, y - drag["offset_y"])
         drag["ghost"].lift()
 
     def _on_resize_motion(self, event, drag):
         # Le bord tiré suit la souris, aimanté sur les jours ; l'autre bord ne bouge pas
         task = self.tasks[drag["task_id"]]
-        lane = self.groups[task["group_id"]]["lane"]
-        day = round((event.x_root - lane.winfo_rootx()) / PX_PER_DAY)
+        day = round(self._canvas_xy(event)[0] / PX_PER_DAY)
         end = task["start"] + task["length"]
         if drag["mode"] == "right":
             drag["start"], drag["length"] = task["start"], max(1, day - task["start"])
         else:
             drag["start"] = max(0, min(end - 1, day))
             drag["length"] = end - drag["start"]
-        task["widget"].place_configure(x=drag["start"] * PX_PER_DAY, width=drag["length"] * PX_PER_DAY)
+        _, y = self.body.coords(task["item"])
+        self.body.coords(task["item"], drag["start"] * PX_PER_DAY, y)
+        self.body.itemconfigure(task["item"], width=drag["length"] * PX_PER_DAY)
         self._extend_days(drag["start"] + drag["length"])
 
     def _on_release(self, event):
         drag, self._drag = self._drag, None
         if drag is None:
             return
+        task_id = drag["task_id"]
+        task = self.tasks[task_id]
         if drag["mode"] != "move":
-            task_id = drag["task_id"]
-            task = self.tasks[task_id]
             if (drag["start"], drag["length"]) != (task["start"], task["length"]):
                 # move_task recalcule la ligne (auto-stack) si la tâche chevauche maintenant une autre
                 self.move_task(task_id, drag["start"], drag["length"])
@@ -232,13 +260,11 @@ class GanttView:
             return
         if drag["ghost"] is None:
             return  # Simple clic : la sélection est déjà faite dans _on_press
+        self.body.delete(drag["ghost_item"])
         drag["ghost"].destroy()
-        task_id = drag["task_id"]
-        task = self.tasks[task_id]
         task["widget"].configure(bg=task["color"])
         task["label"].configure(bg=task["color"], fg="white")
         self.move_task(task_id, drag["start"], group_id=drag["group_id"])
-        self._set_highlight(task_id, True)
         if self.on_task_moved:
             self.on_task_moved(task_id, drag["group_id"], drag["start"])
 
@@ -267,21 +293,20 @@ class GanttView:
         task["widget"].configure(cursor=cursor)
         task["label"].configure(cursor=cursor)
 
-    def _group_at(self, y_root:int):
-        # Quel groupe est sous la souris (None si aucun)
-        y = y_root - self.viewport.winfo_rooty()
-        for group_id, group in self.groups.items():
-            frame = group["frame"]
-            if frame.winfo_y() <= y < frame.winfo_y() + frame.winfo_height():
+    def _group_at(self, y:float):
+        # Quel groupe est à cette hauteur du canvas (None si aucun)
+        for group_id in self.group_order:
+            group = self.groups[group_id]
+            if group["y"] <= y < group["y"] + group["height"]:
                 return group_id
         return None
 
-    # ---------- Interne ----------
+    # ---------- Interne : tâches et lignes ----------
 
     def _make_task_widget(self, task_id):
         task = self.tasks[task_id]
         # Frame + Label et pas Button, sinon le Button gêne le drag
-        widget = tk.Frame(self.groups[task["group_id"]]["lane"], bg=task["color"], cursor="hand2",
+        widget = tk.Frame(self.body, bg=task["color"], cursor="hand2",
                           highlightthickness=2, highlightbackground=task["color"], highlightcolor=task["color"])
         label = tk.Label(widget, text=task["name"], bg=task["color"], fg="white", anchor="w", padx=4)
         label.pack(fill="both", expand=True)
@@ -291,9 +316,10 @@ class GanttView:
             w.bind("<Motion>", lambda e: self._on_hover(e, task_id))
             w.bind("<ButtonRelease-1>", self._on_release)
             w.bind("<Button-3>", lambda e: self._on_right_click(e, task_id))
+        # Tag du groupe sur la tâche : quand un groupe au-dessus grandit, ses tâches bougent avec lui
+        task["item"] = self.body.create_window(0, 0, window=widget, anchor="nw",
+                                               tags=("task", self.groups[task["group_id"]]["tag"]))
         task["widget"], task["label"] = widget, label
-        if task_id == self.selected:
-            self._set_highlight(task_id, True)
 
     def _overlaps(self, task_id, other_id) -> bool:
         a, b = self.tasks[task_id], self.tasks[other_id]
@@ -302,7 +328,8 @@ class GanttView:
     def _put_in_free_row(self, task_id):
         # Auto-stack : première ligne du groupe où la tâche ne chevauche personne, sinon nouvelle ligne
         task = self.tasks[task_id]
-        rows = self.groups[task["group_id"]]["rows"]
+        group = self.groups[task["group_id"]]
+        rows = group["rows"]
         for index, row in enumerate(rows):
             if not any(self._overlaps(task_id, other) for other in row):
                 break
@@ -312,8 +339,8 @@ class GanttView:
             self._resize_group(task["group_id"])
         rows[index].append(task_id)
         task["row"] = index
-        task["widget"].place(x=task["start"] * PX_PER_DAY, y=index * ROW_HEIGHT + ROW_PADDING,
-                             width=task["length"] * PX_PER_DAY, height=ROW_HEIGHT - 2 * ROW_PADDING)
+        self.body.coords(task["item"], task["start"] * PX_PER_DAY, group["y"] + index * ROW_HEIGHT + ROW_PADDING)
+        self.body.itemconfigure(task["item"], width=task["length"] * PX_PER_DAY, height=ROW_HEIGHT - 2 * ROW_PADDING)
 
     def _take_out_of_row(self, task_id):
         task = self.tasks[task_id]
@@ -328,25 +355,99 @@ class GanttView:
             self._resize_group(group_id)
 
     def _resize_group(self, group_id):
-        rows = max(1, len(self.groups[group_id]["rows"]))
-        self.groups[group_id]["frame"].configure(height=rows * ROW_HEIGHT)
+        group = self.groups[group_id]
+        height = max(1, len(group["rows"])) * ROW_HEIGHT
+        delta = height - group["height"]
+        if delta == 0:
+            return
+        group["height"] = height
+        bottom = group["y"] + height
+        self.body.coords(group["tag"] + "_sep", 0, bottom, LINE_LENGTH, bottom)
+        self.sidebar.coords(group["tag"] + "_sep", 0, bottom, SIDEBAR_WIDTH, bottom)
+        # Les groupes en dessous glissent (avec leurs tâches), sans être recréés
+        self._shift_groups_after(group_id, delta)
+        self._update_scrollregion()
+
+    def _shift_groups_after(self, group_id, delta:int):
+        for other_id in self.group_order[self.group_order.index(group_id) + 1:]:
+            other = self.groups[other_id]
+            other["y"] += delta
+            self.body.move(other["tag"], 0, delta)
+            self.sidebar.move(other["tag"], 0, delta)
+
+    def _content_height(self) -> int:
+        if not self.group_order:
+            return 0
+        last = self.groups[self.group_order[-1]]
+        return last["y"] + last["height"]
+
+    # ---------- Interne : largeur, grille et en-tête des dates ----------
 
     def set_min_width(self, width:int):
-        # Appelé quand la fenêtre change de taille : les lignes remplissent toute la largeur visible
+        # Appelé quand la fenêtre change de taille : la grille remplit toute la largeur visible
         self.min_width = width
-        self._update_width()
+        self._on_width_change()
 
     def _extend_days(self, last_day:int):
         if last_day > self.total_days:
             self.total_days = last_day
-            self._update_width()
+            self._on_width_change()
 
-    def _update_width(self):
-        content_width = GROUP_LABEL_WIDTH + self.total_days * PX_PER_DAY
-        self.width_spacer.configure(width=max(self.min_width, content_width))
+    def _width(self) -> int:
+        # Quelques jours en plus après la dernière tâche, pour pouvoir l'étirer / la déplacer plus loin
+        return max(self.min_width, (self.total_days + EXTRA_DAYS) * PX_PER_DAY)
+
+    def _on_width_change(self):
+        width = self._width()
+        if width == self._drawn_width:
+            return
+        self._drawn_width = width
+        self._draw_grid()
+        self._draw_header()
+        self._update_scrollregion()
+
+    def _update_scrollregion(self):
+        width, height = self._width(), self._content_height()
+        self.body.configure(scrollregion=(0, 0, width, height))
+        self.sidebar.configure(scrollregion=(0, 0, SIDEBAR_WIDTH, height))
+        self.header.configure(scrollregion=(0, 0, width, HEADER_HEIGHT))
+
+    def _days_drawn(self) -> int:
+        return self._width() // PX_PER_DAY + 1
+
+    def _draw_grid(self):
+        # Colonnes des jours (week-ends en gris clair) derrière les tâches.
+        # Lignes très hautes : pas besoin de les redessiner quand on ajoute des groupes.
+        self.body.delete("grid")
+        for day in range(self._days_drawn()):
+            x = day * PX_PER_DAY
+            if (self.start_date + timedelta(days=day)).weekday() >= 5:
+                self.body.create_rectangle(x, 0, x + PX_PER_DAY, LINE_LENGTH, fill=WEEKEND_BG, outline="", tags=("grid",))
+            self.body.create_line(x, 0, x, LINE_LENGTH, fill=GRID_COLOR, tags=("grid",))
+        self.body.tag_lower("grid")  # Sous les séparateurs de groupes (les tâches sont toujours au-dessus)
+
+    def _draw_header(self):
+        header, row = self.header, HEADER_ROW_HEIGHT
+        header.delete("all")
+        width = self._width()
+        for day in range(self._days_drawn()):
+            current = self.start_date + timedelta(days=day)
+            x = day * PX_PER_DAY
+            if current.weekday() >= 5:
+                header.create_rectangle(x, row, x + PX_PER_DAY, 2 * row, fill=WEEKEND_BG, outline="")
+            header.create_line(x, row, x, 2 * row, fill=GRID_COLOR)
+            header.create_text(x + PX_PER_DAY / 2, row * 1.5, text=str(current.day), font=("Segoe UI", 8))
+            # Nom du mois au 1er de chaque mois (et au début, s'il reste assez de place avant le mois suivant)
+            days_left_in_month = (current.replace(day=28) + timedelta(days=4)).replace(day=1) - current
+            if current.day == 1 or (day == 0 and days_left_in_month.days >= 4):
+                header.create_line(x, 0, x, row, fill=GROUP_SEPARATOR)
+                header.create_text(x + 6, row / 2, text=current.strftime("%B %Y"), anchor="w",
+                                   font=("Segoe UI", 9, "bold"))
+        header.create_line(0, row, width, row, fill=GRID_COLOR)
+        header.create_line(0, 2 * row - 1, width, 2 * row - 1, fill=GROUP_SEPARATOR)
 
 
-def get_main_page() -> tuple:
+def get_main_page(start_date:date=None) -> tuple:
     root = tk.Tk()
     root.title("Gantt Manager")
 
@@ -360,40 +461,55 @@ def get_main_page() -> tuple:
     container = tk.Frame(root)
     container.pack(fill="both", expand=True)
 
-    canvas = tk.Canvas(container, bg="lightgray", highlightthickness=0)
-    v_scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
-    h_scrollbar = ttk.Scrollbar(container, orient="horizontal", command=canvas.xview)
-    canvas.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+    # Coin en haut à gauche, au-dessus des noms de groupes
+    corner = tk.Frame(container, bg=GROUP_BG, width=SIDEBAR_WIDTH, height=HEADER_HEIGHT,
+                      highlightthickness=1, highlightbackground=GROUP_SEPARATOR)
+    corner.grid_propagate(False)
+    tk.Label(corner, text="Groups", bg=GROUP_BG, font=("Segoe UI", 9, "bold")).place(x=10, rely=0.5, anchor="w")
 
-    # grid pour que les deux scrollbars se rejoignent proprement dans le coin
-    canvas.grid(row=0, column=0, sticky="nsew")
-    v_scrollbar.grid(row=0, column=1, sticky="ns")
-    h_scrollbar.grid(row=1, column=0, sticky="ew")
-    container.rowconfigure(0, weight=1)
-    container.columnconfigure(0, weight=1)
+    header = tk.Canvas(container, bg=HEADER_BG, height=HEADER_HEIGHT, highlightthickness=0)
+    sidebar = tk.Canvas(container, bg=GROUP_BG, width=SIDEBAR_WIDTH, highlightthickness=1,
+                        highlightbackground=GROUP_SEPARATOR)
+    body = tk.Canvas(container, bg=GANTT_BG, highlightthickness=0)
+    v_scrollbar = ttk.Scrollbar(container, orient="vertical", command=body.yview)
+    h_scrollbar = ttk.Scrollbar(container, orient="horizontal", command=body.xview)
 
-    viewport = tk.Frame(canvas, bg="lightgray")
-    canvas.create_window((0, 0), window=viewport, anchor="nw")
-    # Dès que le contenu change de taille, on met à jour la zone scrollable
-    viewport.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    # Quand le body scrolle, le header suit en horizontal et la sidebar en vertical
+    def on_body_y(first, last):
+        v_scrollbar.set(first, last)
+        sidebar.yview_moveto(first)
+    def on_body_x(first, last):
+        h_scrollbar.set(first, last)
+        header.xview_moveto(first)
+    body.configure(yscrollcommand=on_body_y, xscrollcommand=on_body_x)
 
-    # Molette = vertical, Shift + molette = horizontal (seulement quand la souris est sur le Gantt)
+    corner.grid(row=0, column=0, sticky="nsew")
+    header.grid(row=0, column=1, sticky="ew")
+    sidebar.grid(row=1, column=0, sticky="ns")
+    body.grid(row=1, column=1, sticky="nsew")
+    v_scrollbar.grid(row=1, column=2, sticky="ns")
+    h_scrollbar.grid(row=2, column=1, sticky="ew")
+    container.rowconfigure(1, weight=1)
+    container.columnconfigure(1, weight=1)
+
+    # Molette = vertical, Shift + molette = horizontal, seulement quand la souris est sur le Gantt
+    # (on regarde le widget sous la souris : les tâches sont des enfants du body)
+    gantt_paths = tuple(str(c) for c in (body, sidebar, header))
+    def over_gantt(event):
+        widget = root.winfo_containing(event.x_root, event.y_root)
+        return widget is not None and str(widget).startswith(gantt_paths)
     def on_wheel(event):
-        canvas.yview_scroll(-event.delta // 120, "units")
+        if over_gantt(event):
+            body.yview_scroll(-event.delta // 120, "units")
     def on_shift_wheel(event):
-        canvas.xview_scroll(-event.delta // 120, "units")
-    def bind_wheel(event):
-        canvas.bind_all("<MouseWheel>", on_wheel)
-        canvas.bind_all("<Shift-MouseWheel>", on_shift_wheel)
-    def unbind_wheel(event):
-        canvas.unbind_all("<MouseWheel>")
-        canvas.unbind_all("<Shift-MouseWheel>")
-    canvas.bind("<Enter>", bind_wheel)
-    canvas.bind("<Leave>", unbind_wheel)
+        if over_gantt(event):
+            body.xview_scroll(-event.delta // 120, "units")
+    root.bind_all("<MouseWheel>", on_wheel)
+    root.bind_all("<Shift-MouseWheel>", on_shift_wheel)
 
-    gantt = GanttView(viewport)
-    # Le Gantt fait au moins la largeur de la fenêtre (sinon les lignes s'arrêtent à la dernière tâche)
-    canvas.bind("<Configure>", lambda e: gantt.set_min_width(e.width))
+    gantt = GanttView(body, sidebar, header, start_date)
+    # La grille fait au moins la largeur de la fenêtre
+    body.bind("<Configure>", lambda e: gantt.set_min_width(e.width))
 
     return root, gantt
 
