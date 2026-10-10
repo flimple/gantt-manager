@@ -23,7 +23,7 @@ class Workspace:
         if not self.can_add_task:
             return None
         # Par example un max des task = 100 -> min_id = 100/10 = 10 et max_id = 100-1 = 99 donc le random
-        # range va selectionner entre 10 et 99 et on aura toujours un nombre de digits egal
+        # Range va selectionner entre 10 et 99 et on aura toujours un nombre de digits egal
         max_task_id, min_task_id = self.max_tasks-1, self.max_tasks // 10
         while True:
             rnd_task_id = random.randint(min_task_id, max_task_id)
@@ -45,12 +45,20 @@ class Workspace:
     def add_milestone(self):
         pass
 
-def main():
-    root = ui.get_main_page()
-    prj = ui.get_recent_projects()
+DEMO = True  # TEMPORAIRE : lance demo.setup() pour tester l'UI
 
-    root.mainloop()
-    prj.mainloop()
+def main():
+    root, gantt = ui.get_main_page()
+
+    if DEMO:
+        import demo
+        demo.setup(root, gantt)
+        # "Create New Project" ferme juste la fenêtre pour arriver sur le Gantt vide
+        recent = ui.get_recent_projects(root, on_create=lambda: recent.destroy())
+    else:
+        ui.get_recent_projects(root)
+
+    root.mainloop()  # Une seule boucle pour toutes les fenêtres
 
 if __name__ == "__main__":
     main()
