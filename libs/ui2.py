@@ -47,17 +47,18 @@ def get_dash_board_gui() -> ctk.CTk:
 
     #region Header ui MAIN
 
-    header = ctk.CTkFrame(app, fg_color=("#FFFFFF", "#181D25"), bg_color="transparent", height=50)
+    header = ctk.CTkFrame(app, fg_color=("#FFFFFF", "#181D25"), corner_radius=0, bg_color="transparent", height=50, border_color=("#D8DFE9", "#323B4A"), border_width=1)
     header.pack(fill="x", expand=False)
     header.pack_propagate(False)
+    ctk.CTkFrame(app, height=1, corner_radius=0, fg_color=("#D8DFE9", "#323B4A")).pack(fill="x")   # under the header
 
     title = ctk.CTkFrame(header, fg_color="transparent", bg_color="transparent", width=300)
-    title.pack(fill="y", expand=False, side=ctk.LEFT, padx=(3, 0))
+    title.pack(fill="y", expand=False, side=ctk.LEFT, padx=(3, 0), pady=3)
     title.pack_propagate(False)
     title_logo = ctk.CTkLabel(title, text="", fg_color="transparent", bg_color="transparent", image=ctk.CTkImage(light_image=Image.open("assets/logo_form.png"), size=(40,40)))
     title_logo.pack(side=ctk.LEFT, padx=(2, 8))
     title_text = ctk.CTkLabel(title, text="", fg_color="transparent", bg_color="transparent", image=ctk.CTkImage(light_image=Image.open("assets/title_light.png"), dark_image=Image.open("assets/title_dark.png"), size=(120,30)))
-    title_text.pack(side=ctk.LEFT, pady=(10,0))
+    title_text.pack(side=ctk.LEFT, pady=(5,0))
 
     
     def change_theme():
@@ -71,17 +72,83 @@ def get_dash_board_gui() -> ctk.CTk:
     create_task_button = ctk.CTkButton(header, text="+ New Task", corner_radius=10, height=35, width=130, bg_color="transparent", fg_color=("#2E5A8B", "#5B9BE6"), hover_color=("#234770", "#78AEEE"), border_width=1, border_color=("#D6E6F8", "#2F4666"), text_color=("#FFFFFF", "#0B1220"), font=("Arial", 13), command=create_task)
     create_task_button.pack(side=ctk.RIGHT, padx=(0, 10))
 
-    def gantt_view_selected():
+    def gantt_view_selected(value):
         pass
-    gantt_view_period = ctk.CTkSegmentedButton(header, values=["Days", "Weeks", "Months"], command=gantt_view_selected, fg_color=("#1C222B", ""), selected_color=("", ""), selected_hover_color=("", ""), unselected_color=("", ""), unselected_hover_color=("", ""), text_color=("", ""), text_color_disabled=("", ""))
+    gantt_view_period = ctk.CTkSegmentedButton(header, height=35, corner_radius=10, bg_color="transparent", border_width=1, values=["Days", "Weeks", "Months"], command=gantt_view_selected, fg_color=("#F3F5F9", "#12161C"), selected_color=("#D6E6F8", "#2F4666"), selected_hover_color=("#C2D3E9", "#3E4C68"), unselected_color=("#F3F5F9", "#12161C"), unselected_hover_color=("#EAF1FA", "#2A3342"), text_color=("#1B2430", "#E6EAF0"), text_color_disabled=("#9AA3B0", "#5A6577"))
+    gantt_view_period.pack(side=ctk.RIGHT, padx=(0, 10))
+    gantt_view_period.set("Week")
+
+    def search_tasks(var_name, index, mode):
+        current_text = search_txt_var.get()
+        
+    search_txt_var = ctk.StringVar()
+    search_txt_var.trace_add("write", search_tasks)
+    search_tasks_entry = ctk.CTkEntry(header, textvariable=search_txt_var, height=35, corner_radius=10, width=200, placeholder_text="Search tasks", bg_color="transparent", fg_color=("#FFFFFF", "#11151B"), text_color=("#1B2430", "#E6EAF0"), placeholder_text_color=("#7A869A", "#6F7B8E"), border_color=("#D8DFE9", "#323B4A"))
+    search_tasks_entry.pack(side=ctk.RIGHT, padx=(0, 10))
+
 
     #endregion
 
-    main_container = ctk.CTkFrame(app, fg_color="transparent", bg_color="transparent")
+    main_container = ctk.CTkFrame(app, fg_color=("#F3F5F9", "#12161C"), bg_color="transparent")
     main_container.pack(fill="both", expand=True)
 
-    gantt_visualizer = ctk.CTkFrame(main_container, fg_color=("#FFFFFF", "#1C222B"), bg_color="transparent")
-    gantt_visualizer.pack(pady=10, padx=10, fill="both", expand=True)
+    
+    workspace_details = ctk.CTkFrame(main_container, fg_color=("#FFFFFF", "#1C222B"), corner_radius=0, bg_color="transparent", width=250, border_width=1, border_color=("#D8DFE9", "#323B4A"))
+    workspace_details.pack(fill="y", expand=False, side=ctk.LEFT)
+    workspace_details.pack_propagate(False)
+
+    workspace_indic = ctk.CTkLabel(workspace_details, fg_color="transparent", bg_color="transparent", border_width=0, text="WORKSPACE", text_color=("#7A869A", "#6F7B8E"), font=("Segoe UI", 14))
+    workspace_indic.pack(pady=(10, 25), padx=10, expand=False, anchor="nw")
+    works_infos = ctk.CTkButton(workspace_details, fg_color="transparent", bg_color="transparent", text="   Workspace Details", text_color=("#2E5A8B", "#B9D3F2"), hover_color=("#EAF1FA", "#2A3342"), anchor="w", corner_radius=6, height=34, font=("Segoe UI", 14))
+    works_infos.pack(fill="x", padx=10, pady=2)
+    works_settings = ctk.CTkButton(workspace_details, fg_color="transparent", bg_color="transparent", text="   Workspace Settings", text_color=("#2E5A8B", "#B9D3F2"), hover_color=("#EAF1FA", "#2A3342"), anchor="w", corner_radius=6, height=34, font=("Segoe UI", 14))
+    works_settings.pack(fill="x", padx=10, pady=2)
+
+    panels_indic = ctk.CTkLabel(workspace_details, fg_color="transparent", bg_color="transparent", border_width=0, text="VIEWS", text_color=("#7A869A", "#6F7B8E"), font=("Segoe UI", 14))
+    panels_indic.pack(pady=(10, 25), padx=10, expand=False, anchor="nw")
+    def switch_view(panel_id : int):
+        pass
+    
+    timeline_btn = ctk.CTkButton(workspace_details, text="  Timeline", anchor="w", height=34, corner_radius=6, border_width=0, fg_color="transparent", hover_color=("#EAF1FA", "#2A3342"), text_color=("#2E5A8B", "#B9D3F2"), font=("Segoe UI", 14), command=lambda: switch_view(0))
+    timeline_btn.pack(pady=2, padx=10, fill="x")
+    todoL_btn = ctk.CTkButton(workspace_details, text="  To-do lists", anchor="w", height=34, corner_radius=6, border_width=0, fg_color="transparent", hover_color=("#EAF1FA", "#2A3342"), text_color=("#2E5A8B", "#B9D3F2"), font=("Segoe UI", 14), command=lambda: switch_view(1))
+    todoL_btn.pack(pady=2, padx=10, fill="x")
+    calendar_btn = ctk.CTkButton(workspace_details, text="  Calendar", anchor="w", height=34, corner_radius=6, border_width=0, fg_color="transparent", hover_color=("#EAF1FA", "#2A3342"), text_color=("#2E5A8B", "#B9D3F2"), font=("Segoe UI", 14), command=lambda: switch_view(2))
+    calendar_btn.pack(pady=2, padx=10, fill="x")
+    
+
+
+
+    task_details = ctk.CTkFrame(main_container, fg_color=("#FFFFFF", "#1C222B"), corner_radius=0, bg_color="transparent", width=330, border_width=1, border_color=("#D8DFE9", "#323B4A"))
+    task_details.pack(fill="y", expand=False, side=ctk.RIGHT)
+    task_details.pack_propagate(False)
+
+    task_details_indic = ctk.CTkLabel(task_details, fg_color="transparent", bg_color="transparent", border_width=0, text="TASK DETAILS", text_color=("#7A869A", "#6F7B8E"), font=("Segoe UI", 14))
+    task_details_indic.pack(pady=(10, 25), expand=False, anchor="nw", padx=10)
+    no_task_selected = ctk.CTkLabel(task_details, fg_color="transparent", bg_color="transparent", border_width=0, text="No task was selected.", text_color=("#7A869A", "#6F7B8E"), font=("Segoe UI", 14))
+    no_task_selected.pack(expand=False, anchor="w", padx=10, fill="x")
+        
+    
+    #region Footer ui MAIN
+        
+    footer = ctk.CTkFrame(app, fg_color=("#FFFFFF", "#181D25"), border_color=("#D8DFE9", "#323B4A"), border_width=1, corner_radius=0, bg_color="transparent", height=25)
+    footer.pack(fill="x", expand=False)
+    footer.pack_propagate(False)
+    
+    # si on veux utiliser le cloud apres
+    save_mode = ctk.CTkLabel(footer, text="Saved locally", bg_color="transparent", fg_color="transparent", text_color=("#5B6778", "#9AA6B8"))
+    save_mode.pack(side=ctk.LEFT, padx=10, pady=2)
+    file_name_indic = ctk.CTkLabel(footer, text="filename.gantt", bg_color="transparent", fg_color="transparent", text_color=("#5B6778", "#9AA6B8"))
+    file_name_indic.pack(side=ctk.LEFT, padx=10, pady=2)
+    statistics_indic = ctk.CTkLabel(footer, text="7 tasks • 2 done • 0 late", bg_color="transparent", fg_color="transparent", text_color=("#5B6778", "#9AA6B8"))
+    statistics_indic.pack(side=ctk.LEFT, padx=10, pady=2)
+
+    cur_view_mode = ctk.CTkLabel(footer, text="Week view", bg_color="transparent", fg_color="transparent", text_color=("#5B6778", "#9AA6B8"))
+    cur_view_mode.pack(side=ctk.RIGHT, padx=(0, 10), pady=2)
+
+    
+    #endregion
+            
     return app
 
 
