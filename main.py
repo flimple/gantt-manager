@@ -17,5 +17,9 @@ def main():
 
     root.mainloop()
 
+def main2():
+    root = gui.get_recent_projects()
+    root.mainloop()
+
 if __name__ == "__main__":
-    main()
+    main2()
