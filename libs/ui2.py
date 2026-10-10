@@ -59,8 +59,21 @@ def get_dash_board_gui() -> ctk.CTk:
     title_text = ctk.CTkLabel(title, text="", fg_color="transparent", bg_color="transparent", image=ctk.CTkImage(light_image=Image.open("assets/title_light.png"), dark_image=Image.open("assets/title_dark.png"), size=(120,30)))
     title_text.pack(side=ctk.LEFT, pady=(10,0))
 
-    toggle_mode = ctk.CTkButton(header, text="", height=35, width=35, corner_radius=18)
-    toggle_mode.pack()
+    
+    def change_theme():
+        ctk.set_appearance_mode("Dark" if ctk.get_appearance_mode() == "Light" else "Light")
+        
+    toggle_mode = ctk.CTkButton(header, text="", height=35, width=35, corner_radius=10, bg_color="transparent", fg_color=("#FFFFFF", "#1C222B"), hover_color=("#EAF1FA", "#2A3342"), border_color=("#D8DFE9", "#323B4A"), border_width=1, image=ctk.CTkImage(light_image=Image.open("assets/ui/dark_mode.png"), dark_image=Image.open("assets/ui/light_mode.png"), size=(15, 15)), command=change_theme)
+    toggle_mode.pack(side=ctk.RIGHT, padx=(0, 15))
+
+    def create_task():
+        pass
+    create_task_button = ctk.CTkButton(header, text="+ New Task", corner_radius=10, height=35, width=130, bg_color="transparent", fg_color=("#2E5A8B", "#5B9BE6"), hover_color=("#234770", "#78AEEE"), border_width=1, border_color=("#D6E6F8", "#2F4666"), text_color=("#FFFFFF", "#0B1220"), font=("Arial", 13), command=create_task)
+    create_task_button.pack(side=ctk.RIGHT, padx=(0, 10))
+
+    def gantt_view_selected():
+        pass
+    gantt_view_period = ctk.CTkSegmentedButton(header, values=["Days", "Weeks", "Months"], command=gantt_view_selected, fg_color=("#1C222B", ""), selected_color=("", ""), selected_hover_color=("", ""), unselected_color=("", ""), unselected_hover_color=("", ""), text_color=("", ""), text_color_disabled=("", ""))
 
     #endregion
 
