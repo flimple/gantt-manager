@@ -1,9 +1,16 @@
+import os
 import tkinter as tk
 from datetime import date, timedelta
 from tkinter import ttk
 
-LIST_BG = "lightgray"
-LIST_HOVER_BG = "gray75"
+# Fenêtre d'accueil
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+WELCOME_BG = "#f9f8f3"   # Même couleur que le fond des images du logo, pour qu'elles se fondent
+CARD_BG = "white"
+CARD_BORDER = "#dcdad2"
+BRAND_COLOR = "#1d3a5f"  # Bleu foncé du titre "GANTTIFY"
+LIST_BG = CARD_BG
+LIST_HOVER_BG = "#eef2f7"
 
 # Gantt : 1 jour = PX_PER_DAY pixels (une seule constante à changer pour tout redimensionner)
 PX_PER_DAY = 30
@@ -13,6 +20,8 @@ SIDEBAR_WIDTH = 160      # Colonne de gauche avec les noms des groupes
 HEADER_ROW_HEIGHT = 22   # En-tête des dates : une ligne pour les mois, une pour les jours
 HEADER_HEIGHT = 2 * HEADER_ROW_HEIGHT
 EXTRA_DAYS = 10          # Jours affichés en plus après la dernière tâche
+MIN_TIMELINE_DAYS = 365  # Le planning montre au moins 1 an, pour que la scrollbar horizontale serve
+GROW_DAYS = 90           # Jours ajoutés quand on arrive au bout à droite
 LINE_LENGTH = 100000     # Longueur des lignes de grille/séparateurs (plus grand que tout planning)
 GANTT_BG = "white"
 GROUP_BG = "gray95"
@@ -23,6 +32,7 @@ WEEKEND_BG = "gray96"
 SELECTED_BORDER = "black"     # Bordure de la tâche sélectionnée
 DRAG_PLACEHOLDER = "gray80"   # Couleur de la tâche d'origine pendant un drag
 RESIZE_EDGE = 6               # Zone (px) sur les bords d'une tâche sélectionnée pour changer sa durée
+GROUP_RESIZE_EDGE = 4         # Zone (px) autour de la ligne sous un groupe pour changer sa hauteur
 
 
 def fill_recent_projects(frame:tk.Frame, projects:list):
@@ -73,7 +83,9 @@ class GanttView:
         self.group_order = []  # Ordre d'affichage des groupes, de haut en bas
         self.tasks = {}        # task_id -> {"item", "widget", "label", "group_id", "name", "color", "start", "length", "row"}
         self.total_days = 0
-        self.min_width = 0     # Largeur visible du body : la grille la remplit toujours
+        self.timeline_days = MIN_TIMELINE_DAYS  # Jours affichés, même sans tâches (grandit en scrollant)
+        self.min_width = 0     # Taille visible du body : la grille la remplit toujours
+        self.min_height = 0
         self.selected = None
         self._drag = None      # Infos du drag en cours (None quand on ne drag pas)
         self._drawn_width = None
@@ -84,6 +96,14 @@ class GanttView:
         self.on_task_moved = None         # on_task_moved(task_id, group_id, start) après un drag
         self.on_task_resized = None       # on_task_resized(task_id, start, length) après avoir tiré un bord
         self.on_task_right_click = None   # on_task_right_click(task_id)
+        self.on_group_resized = None      # on_group_resized(group_id, height) après avoir tiré la ligne d'un groupe
+
+        # Tirer la ligne sous un nom de groupe (dans la sidebar) = changer la hauteur du groupe
+        self._group_drag = None
+        sidebar.bind("<Motion>", self._on_sidebar_hover)
+        sidebar.bind("<ButtonPress-1>", self._on_sidebar_press)
+        sidebar.bind("<B1-Motion>", self._on_sidebar_drag)
+        sidebar.bind("<ButtonRelease-1>", self._on_sidebar_release)
 
         body.bind("<Button-1>", lambda e: self.select_task(None))  # Clic dans le vide = désélectionner
         self._on_width_change()
@@ -95,7 +115,9 @@ class GanttView:
         tag = f"g{self._next_tag}"
         self._next_tag += 1
         y = self._content_height()
-        self.groups[group_id] = {"name": name, "tag": tag, "rows": [], "y": y, "height": ROW_HEIGHT}
+        # custom_height : hauteur choisie en tirant la ligne sous le groupe (0 = automatique)
+        self.groups[group_id] = {"name": name, "tag": tag, "rows": [], "y": y, "height": ROW_HEIGHT,
+                                 "custom_height": 0}
         self.group_order.append(group_id)
 
         # Ligne de séparation sous le groupe (très longue : pas besoin de la rallonger plus tard)
@@ -293,6 +315,38 @@ class GanttView:
         task["widget"].configure(cursor=cursor)
         task["label"].configure(cursor=cursor)
 
+    # ---------- Hauteur des groupes (sidebar) ----------
+
+    def _group_border_at(self, event):
+        # Groupe dont la ligne du bas est sous la souris (None si aucun)
+        y = self.sidebar.canvasy(event.y)
+        for group_id in self.group_order:
+            group = self.groups[group_id]
+            if abs(y - (group["y"] + group["height"])) <= GROUP_RESIZE_EDGE:
+                return group_id
+        return None
+
+    def _on_sidebar_hover(self, event):
+        if self._group_drag is None:
+            self.sidebar.configure(cursor="sb_v_double_arrow" if self._group_border_at(event) else "")
+
+    def _on_sidebar_press(self, event):
+        self._group_drag = self._group_border_at(event)
+
+    def _on_sidebar_drag(self, event):
+        group_id = self._group_drag
+        if group_id is None:
+            return
+        group = self.groups[group_id]
+        height = max(self._min_group_height(group_id), round(self.sidebar.canvasy(event.y) - group["y"]))
+        group["custom_height"] = height
+        self._apply_group_height(group_id, height)
+
+    def _on_sidebar_release(self, event):
+        group_id, self._group_drag = self._group_drag, None
+        if group_id is not None and self.on_group_resized:
+            self.on_group_resized(group_id, self.groups[group_id]["height"])
+
     def _group_at(self, y:float):
         # Quel groupe est à cette hauteur du canvas (None si aucun)
         for group_id in self.group_order:
@@ -354,9 +408,17 @@ class GanttView:
                 rows.pop()
             self._resize_group(group_id)
 
+    def _min_group_height(self, group_id) -> int:
+        # Hauteur nécessaire pour afficher toutes les lignes de tâches du groupe
+        return max(1, len(self.groups[group_id]["rows"])) * ROW_HEIGHT
+
     def _resize_group(self, group_id):
+        # Hauteur choisie à la souris, mais jamais moins que ce que les tâches demandent
         group = self.groups[group_id]
-        height = max(1, len(group["rows"])) * ROW_HEIGHT
+        self._apply_group_height(group_id, max(self._min_group_height(group_id), group["custom_height"]))
+
+    def _apply_group_height(self, group_id, height:int):
+        group = self.groups[group_id]
         delta = height - group["height"]
         if delta == 0:
             return
@@ -383,10 +445,11 @@ class GanttView:
 
     # ---------- Interne : largeur, grille et en-tête des dates ----------
 
-    def set_min_width(self, width:int):
-        # Appelé quand la fenêtre change de taille : la grille remplit toute la largeur visible
-        self.min_width = width
+    def set_min_size(self, width:int, height:int):
+        # Appelé quand la fenêtre change de taille : la grille remplit toute la zone visible
+        self.min_width, self.min_height = width, height
         self._on_width_change()
+        self._update_scrollregion()
 
     def _extend_days(self, last_day:int):
         if last_day > self.total_days:
@@ -394,8 +457,15 @@ class GanttView:
             self._on_width_change()
 
     def _width(self) -> int:
-        # Quelques jours en plus après la dernière tâche, pour pouvoir l'étirer / la déplacer plus loin
-        return max(self.min_width, (self.total_days + EXTRA_DAYS) * PX_PER_DAY)
+        # Au moins timeline_days jours (pour pouvoir scroller), et quelques jours après la dernière tâche
+        days = max(self.timeline_days, self.total_days + EXTRA_DAYS)
+        return max(self.min_width, days * PX_PER_DAY)
+
+    def extend_timeline_if_at_end(self):
+        # Appelé quand on scrolle tout à droite : on rajoute des jours, le scroll peut continuer
+        if self.body.xview()[1] >= 0.999:
+            self.timeline_days = max(self.timeline_days, self.total_days + EXTRA_DAYS) + GROW_DAYS
+            self._on_width_change()
 
     def _on_width_change(self):
         width = self._width()
@@ -407,7 +477,8 @@ class GanttView:
         self._update_scrollregion()
 
     def _update_scrollregion(self):
-        width, height = self._width(), self._content_height()
+        # Jamais plus petit que la zone visible : sinon tkinter laisse scroller au-dessus du 1er groupe
+        width, height = self._width(), max(self.min_height, self._content_height())
         self.body.configure(scrollregion=(0, 0, width, height))
         self.sidebar.configure(scrollregion=(0, 0, SIDEBAR_WIDTH, height))
         self.header.configure(scrollregion=(0, 0, width, HEADER_HEIGHT))
@@ -468,8 +539,10 @@ def get_main_page(start_date:date=None) -> tuple:
     tk.Label(corner, text="Groups", bg=GROUP_BG, font=("Segoe UI", 9, "bold")).place(x=10, rely=0.5, anchor="w")
 
     header = tk.Canvas(container, bg=HEADER_BG, height=HEADER_HEIGHT, highlightthickness=0)
-    sidebar = tk.Canvas(container, bg=GROUP_BG, width=SIDEBAR_WIDTH, highlightthickness=1,
-                        highlightbackground=GROUP_SEPARATOR)
+    # Pas de bordure (highlightthickness=0) : la sidebar doit faire exactement la hauteur du body
+    # pour que le scroll vertical reste aligné ; la ligne de séparation est dessinée dedans
+    sidebar = tk.Canvas(container, bg=GROUP_BG, width=SIDEBAR_WIDTH, highlightthickness=0)
+    sidebar.create_line(SIDEBAR_WIDTH - 1, 0, SIDEBAR_WIDTH - 1, LINE_LENGTH, fill=GROUP_SEPARATOR)
     body = tk.Canvas(container, bg=GANTT_BG, highlightthickness=0)
     v_scrollbar = ttk.Scrollbar(container, orient="vertical", command=body.yview)
     h_scrollbar = ttk.Scrollbar(container, orient="horizontal", command=body.xview)
@@ -481,6 +554,10 @@ def get_main_page(start_date:date=None) -> tuple:
     def on_body_x(first, last):
         h_scrollbar.set(first, last)
         header.xview_moveto(first)
+        # Arrivé tout à droite : on rallonge le planning (après ce callback, pas pendant)
+        if float(last) >= 0.999 and float(first) > 0 and "gantt" in views:
+            body.after_idle(views["gantt"].extend_timeline_if_at_end)
+    views = {}  # Rempli plus bas, une fois le GanttView créé
     body.configure(yscrollcommand=on_body_y, xscrollcommand=on_body_x)
 
     corner.grid(row=0, column=0, sticky="nsew")
@@ -508,35 +585,71 @@ def get_main_page(start_date:date=None) -> tuple:
     root.bind_all("<Shift-MouseWheel>", on_shift_wheel)
 
     gantt = GanttView(body, sidebar, header, start_date)
-    # La grille fait au moins la largeur de la fenêtre
-    body.bind("<Configure>", lambda e: gantt.set_min_width(e.width))
+    views["gantt"] = gantt
+    # La grille fait au moins la taille de la fenêtre
+    body.bind("<Configure>", lambda e: gantt.set_min_size(e.width, e.height))
 
     return root, gantt
 
 
+def load_image(name:str, shrink:int):
+    # Image du dossier assets/, réduite (subsample = diviser la taille par un entier).
+    # None si le fichier manque : la fenêtre s'affiche quand même, sans l'image.
+    try:
+        return tk.PhotoImage(file=os.path.join(ASSETS_DIR, name)).subsample(shrink)
+    except tk.TclError:
+        return None
+
+
+def make_card(parent) -> tk.Frame:
+    # Carte blanche avec bordure ; card.content = la zone où mettre le contenu
+    card = tk.Frame(parent, bg=CARD_BG, highlightthickness=1, highlightbackground=CARD_BORDER)
+    content = tk.Frame(card, bg=CARD_BG)
+    content.pack(fill="both", expand=True, padx=12, pady=12)
+    card.content = content
+    return card
+
+
 def get_recent_projects(root:tk.Tk, projects:list=None, on_create=None, on_open_existing=None) -> tk.Toplevel:
+    # Fenêtre d'accueil : logo + titre en haut, carte "Open" à gauche, carte "Recent" à droite.
     # Toplevel et pas Tk : une seule fenêtre racine par programme
-    window = tk.Toplevel(root)
-    window.title("Recent Projects")
-    window.geometry("650x450")
+    window = tk.Toplevel(root, bg=WELCOME_BG)
+    window.title("Ganttify")
+    width, height = 820, 600
+    # Centrée sur l'écran
+    x = (window.winfo_screenwidth() - width) // 2
+    y = (window.winfo_screenheight() - height) // 2
+    window.geometry(f"{width}x{height}+{x}+{y}")
     window.resizable(False, False)
 
-    parent_frame = tk.Frame(window)
-    parent_frame.pack(fill="both", expand=True, pady=15)
+    # ---------- En-tête : logo + titre ----------
+    brand = tk.Frame(window, bg=WELCOME_BG)
+    brand.pack(fill="x", padx=40, pady=(30, 20))
+    logo = load_image("logo.png", 5)
+    title = load_image("title.png", 2)
+    if logo:
+        tk.Label(brand, image=logo, bg=WELCOME_BG).pack(side=tk.LEFT)
+    if title:
+        tk.Label(brand, image=title, bg=WELCOME_BG).pack(side=tk.LEFT, padx=(12, 0))
+    if not logo and not title:
+        tk.Label(brand, text="GANTTIFY", bg=WELCOME_BG, fg=BRAND_COLOR, font=("Segoe UI", 36, "bold")).pack(side=tk.LEFT)
+    window.images = (logo, title)  # Garder une référence, sinon Python efface les images
 
-    manip_frame = tk.Frame(parent_frame, bg="lightgray", width=180)
-    manip_frame.pack(fill="y", side=tk.LEFT, padx=10)
-    manip_frame.pack_propagate(False)  # Garde la largeur fixe malgré la taille des boutons
+    # ---------- Les deux cartes ----------
+    cards = tk.Frame(window, bg=WELCOME_BG)
+    cards.pack(fill="both", expand=True, padx=40, pady=(0, 40))
 
+    open_card = make_card(cards)
+    open_card.configure(width=240)
+    open_card.pack(side=tk.LEFT, fill="y")
+    open_card.pack_propagate(False)  # Garde la largeur fixe malgré la taille des boutons
     # on_create / on_open_existing : à brancher plus tard, quand on aura le système IO
-    create_new_button = ttk.Button(manip_frame, text="Create New Project", command=on_create)
-    create_new_button.pack(pady=(40, 10))
-    open_existing = ttk.Button(manip_frame, text="Open Existing Project", command=on_open_existing)
-    open_existing.pack(pady=(10, 40))
+    ttk.Button(open_card.content, text="Create New Project", command=on_create).pack(fill="x", padx=8, pady=(10, 8), ipady=4)
+    ttk.Button(open_card.content, text="Open Existing Project", command=on_open_existing).pack(fill="x", padx=8, ipady=4)
 
-    recent_prjs_frame = tk.Frame(parent_frame, bg="lightgray")
-    recent_prjs_frame.pack(fill="both", expand=True, side=tk.LEFT, padx=10)
-    fill_recent_projects(recent_prjs_frame, projects or [])
+    recent_card = make_card(cards)
+    recent_card.pack(side=tk.LEFT, fill="both", expand=True, padx=(30, 0))
+    fill_recent_projects(recent_card.content, projects or [])
+
     window.attributes("-topmost", True)
-
     return window
