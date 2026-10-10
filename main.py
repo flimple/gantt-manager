@@ -1,8 +1,10 @@
 import time
 import os
 import random
-import ui
+import libs.ui as ui
 import asyncio
+import libs.ui2 as gui
+import libs.util as tools
 
 class Workspace:
     def __init__(self, name : str="Project-id"):
@@ -58,7 +60,7 @@ def main():
     else:
         ui.get_recent_projects(root)
 
-    root.mainloop()  # Une seule boucle pour toutes les fenêtres
+    root.mainloop()
 
 if __name__ == "__main__":
     main()
