@@ -553,7 +553,6 @@ class Main_Dashboard:
         del self.tasks[self.selected]
         self.selected = None
         self._save()
-        # after_idle : le bouton "Delete task" fait partie du panneau qu'on reconstruit
         self.gui.after_idle(self.render)
 
     def open_new_task_popup(self):
@@ -674,7 +673,6 @@ class Recent_Projects_Window:
         self.refresh_projects()
 
     def refresh_projects(self):
-        # On enlève toujours les anciens boutons, même si la liste est maintenant vide
         for prj_dt in self.projects_buttons:
             prj_dt.destroy()
         self.projects_buttons = []
@@ -683,16 +681,12 @@ class Recent_Projects_Window:
             empty.pack(pady=40)
             self.projects_buttons.append(empty)
             return
-        # Le plus récemment ouvert en premier
+        
         ordered = sorted(self.projects_data.items(), key=lambda kv: kv[1].get("last_opened", ""), reverse=True)
         for prj_id, pData in ordered:
             when = pData.get("last_opened", pData.get("created", ""))
-            # Le dossier du fichier, pour distinguer deux projets qui ont le même nom
             folder = os.path.basename(os.path.dirname(pData.get("path", ""))) or "?"
-            prj_button = ctk.CTkButton(self.recent_projects, text=f"{pData['name']}\n{folder}  •  {when}", anchor="w", height=44,
-                                       fg_color="transparent", hover_color=HOVER, text_color=TEXT, corner_radius=8,
-                                       # prj_id=prj_id : sinon tous les boutons ouvriraient le dernier projet
-                                       command=lambda prj_id=prj_id: self.open_project(prj_id))
+            prj_button = ctk.CTkButton(self.recent_projects, text=f"{pData['name']}\n{folder}  •  {when}", anchor="w", height=44, fg_color="transparent", hover_color=HOVER, text_color=TEXT, corner_radius=8, command=lambda prj_id=prj_id: self.open_project(prj_id))
             prj_button.pack(fill="x", padx=6, pady=3)
             self.projects_buttons.append(prj_button)
 
@@ -704,7 +698,6 @@ class Recent_Projects_Window:
         create_new_popup = _popup(self.gui, "Create A New Project", "400x300")
 
         def close_popup():
-            # Avant : la fenêtre principale perdait "toujours au-dessus" et ne le récupérait jamais
             create_new_popup.destroy()
             if self.gui.winfo_exists():
                 self.gui.attributes("-topmost", True)
@@ -714,7 +707,6 @@ class Recent_Projects_Window:
             prj_name = prj_name.strip()
             if submit_request.cget("state") == "disabled":
                 return
-            # Un seul fichier : data/<nom>.gantt
             prj_id = dataT.create_project(prj_name)
             if prj_id is None:
                 existence_verifier.configure(text="Could not create the project file.", text_color=ERROR)
@@ -776,7 +768,6 @@ class Recent_Projects_Window:
 
 
 class App_Manager:
-    # Une seule fenêtre CTk pour toute l'app : on change juste son contenu (projets récents <-> dashboard)
     def __init__(self):
         self.root = ctk.CTk()
         self.screen = None
@@ -790,7 +781,6 @@ class App_Manager:
         self.root.resizable(True, True)
 
     def open_recent_project(self):
-        # after(0) : on ne détruit pas le bouton cliqué pendant son propre clic
         self.root.after(0, self._show_recent_projects)
 
     def _show_recent_projects(self):
@@ -802,7 +792,6 @@ class App_Manager:
 
     def _show_dashboard(self, prj_id : int):
         if dataT.load_project(prj_id) is None:
-            # Le fichier .gantt a été déplacé, supprimé ou abîmé : on le retire des récents au lieu de planter
             path = dataT.project_path(prj_id) or "?"
             messagebox.showerror("Open Project", f"The project file can't be opened:\n{path}\n\n"
                                  "It was moved, deleted or damaged. It has been removed from the recent list.", parent=self.root)

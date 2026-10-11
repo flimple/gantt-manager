@@ -5,18 +5,6 @@ import libs.data_manager as dataT
 
 DEMO = True
 
-def main():
-    root, gantt = ui.get_main_page()
-
-    if DEMO:
-        import demo
-        demo.setup(root, gantt)
-        recent = ui.get_recent_projects(root, on_create=lambda: recent.destroy())
-    else:
-        ui.get_recent_projects(root)
-
-    root.mainloop()
-
 def check_env() -> bool:
     res = dataT.check_data_folder() and dataT.check_workspaces_file()
     if not res:
