@@ -127,7 +127,7 @@ def get_dash_board_gui() -> tuple[ctk.CTk, dict]:
     calendar_btn.pack(pady=2, padx=10, fill="x")
     app_data["calendar_toggle"] = calendar_btn
     
-    app_data["timeline"] = list(uiTool.get_timeline_table(main_container, view_mode="Days"))
+    app_data["timeline"] = list(uiTool.get_timeline_table(main_container, view_mode="Weeks"))
     app_data["timeline"][0].pack_forget()
     app_data["calendar"] = list(uiTool.get_calendar_grid(main_container, "Weeks"))
     app_data["calendar"][0].pack_forget()
@@ -177,10 +177,11 @@ class Main_Dashboard:
     gui : ctk.CTk
     _data : dict
 
-    def __init__(self):
+    def __init__(self, workspace_id : int, workspace_stats: dict):
         self.gui, self._data = get_dash_board_gui()
         self._data["timeline_view_mode"].configure(command=lambda val: self.switch_view_mode(val))
-        self._data["timeline"][0].pack(**self._data["timeline"][1])
+        self._data["workspace_stats"].configure(text=workspace_stats["stats_str"])
+        self._data["file_name"].configure(text=workspace_stats["file_name"])
         self._data["timeline_toggle"].configure(command=lambda: self.switch_main_panel(0))
         self._data["todoList_toggle"].configure(command=lambda: self.switch_main_panel(1))
         self._data["calendar_toggle"].configure(command=lambda: self.switch_main_panel(2))
