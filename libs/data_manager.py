@@ -18,8 +18,8 @@ def check_data_folder() -> bool:
 def check_workspaces_file() -> bool:
     if not os.path.exists(WORKSPACES_FILE):
         try:
-            with open(WORKSPACES_FILE, "w"):
-                pass
+            with open(WORKSPACES_FILE, "w") as f:
+                json.dump({}, f)
         except Exception:
             return False
     return True
@@ -39,6 +39,32 @@ def save_workspaces(workspaces : dict) -> bool:
         with open(WORKSPACES_FILE, "w") as f:
             json.dump(workspaces, f)
         return True
+    except Exception:
+        return False
+
+def get_workspace(prj_id : int) -> dict:
+    pass
+
+
+def save_new_workspace_data(prj_id : int):
+    WORKSPACE_DIR = DATA_FOLDER + f"{prj_id}/"
+    if not os.path.exists(WORKSPACE_DIR):
+        os.mkdir(WORKSPACE_DIR)
+    pths = [WORKSPACE_DIR + "tasks.json",  WORKSPACE_DIR + "settings.json", WORKSPACE_DIR + "stats.json"]
+    for pth in pths:
+        with open(pth, "w") as f:
+            json.dump({}, f)
+    
+
+def save_new_workspace(prj_id : int, quick_data : dict) -> bool:
+    try:
+        data = {}
+        with open(WORKSPACES_FILE, "r") as f:
+            data = json.load(f)
+        data[prj_id] = quick_data
+        with open(WORKSPACES_FILE, "w"):
+            json.dump(data, f)
+            return True
     except Exception:
         return False
 
