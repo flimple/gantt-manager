@@ -1,14 +1,11 @@
 import os
-import time
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox
 import customtkinter as ctk
 from PIL import Image
-from libs import font_manager as fontM
 from libs import ui_util as uiTool
 from libs import data_manager as dataT
 from datetime import date, datetime, timedelta
-import random
 
 # Couleurs partagées (clair, sombre)
 ACCENT = ("#2E5A8B", "#5B9BE6")
@@ -22,8 +19,9 @@ HOVER = ("#EAF1FA", "#2A3342")
 SELECTED = ("#D6E6F8", "#2F4666")
 ERROR = ("#D6455D", "#F0788A")
 SUCCESS = ("#2F9E69", "#4FC38A")
-DEFAULT_TASK_COLOR = "#3A86D9"
+DEFAULT_TASK_COLOR = dataT.DEFAULT_TASK_COLOR  # Une seule source de vérité
 RESIZE_EDGE = 6  # Zone (px) sur les bords d'une tâche sélectionnée pour changer ses dates
+DRAG_THRESHOLD = 5  # Pixels minimum avant qu'un clic devienne un déplacement
 
 
 def _asset(*parts) -> str:
@@ -249,7 +247,7 @@ class Main_Dashboard:
         self.selected = None
         self.bars = {}          # task_id -> (widget, canvas_item) sur la timeline
         self._range = None      # (début, fin) affichés par la timeline
-        self._resize = None     # Bord de tâche en train d'être tiré (None sinon)
+        self._drag = None       # Geste en cours sur une barre : déplacement ou étirement (None sinon)
         self._theme = ctk.get_appearance_mode()
 
         self.gui, self._data = get_dash_board_gui(root)
@@ -343,6 +341,11 @@ class Main_Dashboard:
             if wanted != self._range:
                 self._range = wanted
                 self.timeline.set_view(start_date=wanted[0], end_date=wanted[1])
+        elif self._range is not None:
+            # Plus aucune tâche : on revient à la fenêtre par défaut au lieu de garder l'ancienne
+            self._range = None
+            default_start, default_end = self.timeline.default_range()
+            self.timeline.set_view(start_date=default_start, end_date=default_end)
 
         row_height = self.timeline.row_height
         for task_id, task in visible:
@@ -412,69 +415,92 @@ class Main_Dashboard:
 
     # ---------- Sélection et détails ----------
 
-    # ---------- Étirer une tâche par ses bords ----------
+    # ---------- Déplacer une tâche sur sa ligne, ou l'étirer par ses bords ----------
 
     def _bar_edge(self, task_id, x_root : int):
         # "left" / "right" si la souris est sur un bord de la tâche sélectionnée, sinon None
         if task_id != self.selected or task_id not in self.bars:
             return None
         bar = self.bars[task_id][0]
+        width = bar.winfo_width()
         x = x_root - bar.winfo_rootx()
-        if x <= RESIZE_EDGE:
-            return "left"
-        if x >= bar.winfo_width() - RESIZE_EDGE:
+        # Sur une barre étroite (vue Months) deux zones de 6 px se recouvrent et
+        # avalaient toute la barre : plus de milieu pour la saisir, et le bord droit
+        # tirait la date de début. On les limite au tiers de la largeur.
+        edge = min(RESIZE_EDGE, max(width // 3, 1))
+        if x >= width - edge:
             return "right"
+        if x <= edge:
+            return "left"
         return None
 
     def _on_bar_hover(self, event, task_id):
-        # Curseur ↔ sur les bords de la tâche sélectionnée, pour montrer qu'on peut l'étirer
-        if self._resize is None and task_id in self.bars:
-            self.bars[task_id][0].configure(cursor="sb_h_double_arrow" if self._bar_edge(task_id, event.x_root) else "hand2")
+        # Curseur ↔ sur les bords de la tâche sélectionnée (l'étirer), croix de
+        # déplacement partout ailleurs sur la barre (la faire glisser sur sa ligne)
+        if self._drag is None and task_id in self.bars:
+            edge = self._bar_edge(task_id, event.x_root)
+            self.bars[task_id][0].configure(cursor="sb_h_double_arrow" if edge else "fleur")
 
     def _on_bar_press(self, event, task_id):
-        # Le bord est testé AVANT de sélectionner : on n'étire qu'une tâche déjà sélectionnée
+        # Le bord est testé AVANT de sélectionner : on n'étire qu'une tâche déjà
+        # sélectionnée. Ailleurs sur la barre, le geste déplace la tâche entière.
         edge = self._bar_edge(task_id, event.x_root)
         if task_id != self.selected:
             self.select_task(task_id)
-        if edge:
-            task = self.tasks[task_id]
-            self._resize = {"task_id" : task_id, "edge" : edge,
-                            "start" : date.fromisoformat(task["start"]), "end" : date.fromisoformat(task["end"])}
+        task = self.tasks[task_id]
+        self._drag = {"task_id" : task_id, "mode" : edge or "move",
+                      "start" : date.fromisoformat(task["start"]), "end" : date.fromisoformat(task["end"]),
+                      "grab" : self._date_at(event.x_root), "x_press" : event.x_root,
+                      "new_start" : None, "new_end" : None, "moved" : False}
 
     def _date_at(self, x_root : int) -> date:
         # Jour le plus proche de la souris sur la timeline (aimanté sur les jours)
         canvas, day_width = self.timeline_canvas, self.timeline.day_width()
         x = canvas.canvasx(x_root - canvas.winfo_rootx())
-        today = date.today()
-        timeline_start = today - timedelta(days=round(self.timeline.date_to_x(today) / day_width))
-        return timeline_start + timedelta(days=round(x / day_width))
+        return self.timeline.start_date() + timedelta(days=round(x / day_width))
 
     def _on_bar_drag(self, event):
-        resize = self._resize
-        if resize is None:
+        drag = self._drag
+        if drag is None:
             return
-        task = self.tasks[resize["task_id"]]
-        start, end = date.fromisoformat(task["start"]), date.fromisoformat(task["end"])
-        boundary = self._date_at(event.x_root)
-        if resize["edge"] == "right":
+        if not drag["moved"]:
+            # Un simple clic ne doit pas décaler les dates. En vue Months un jour ne
+            # fait que 5 px : on exige aussi une demi-journée, sinon un tremblement
+            # de souris suffisait à déplacer la tâche d'un jour et à l'enregistrer.
+            if abs(event.x_root - drag["x_press"]) < max(DRAG_THRESHOLD, self.timeline.day_width() / 2):
+                return
+            drag["moved"] = True
+        start, end, boundary = drag["start"], drag["end"], self._date_at(event.x_root)
+        if drag["mode"] == "move":
+            # La tâche glisse d'un bloc : même durée, seules les dates changent.
+            # L'écart est compté depuis le jour saisi, donc la barre suit la souris sans sauter.
+            delta = boundary - drag["grab"]
+            new_start, new_end = start + delta, end + delta
+        elif drag["mode"] == "right":
             # Le bord droit est APRÈS le dernier jour : la date de fin est la veille du bord
-            resize["start"], resize["end"] = start, max(start, boundary - timedelta(days=1))
+            new_start, new_end = start, max(start, boundary - timedelta(days=1))
         else:
-            resize["start"], resize["end"] = min(end, boundary), end
-        # Aperçu en direct : seule cette barre bouge
-        widget, item = self.bars[resize["task_id"]]
+            new_start, new_end = min(end, boundary), end
+        drag["new_start"], drag["new_end"] = new_start, new_end
+        # Aperçu en direct : seule cette barre bouge, et uniquement en X. Le Y relu ici est
+        # celui que _place_bars a posé depuis l'index de ligne et il est réécrit tel quel :
+        # la barre ne peut pas changer de ligne.
+        _, item = self.bars[drag["task_id"]]
         _, y = self.timeline_canvas.coords(item)
-        self.timeline_canvas.coords(item, self.timeline.date_to_x(resize["start"]), y)
-        self.timeline_canvas.itemconfigure(item, width=((resize["end"] - resize["start"]).days + 1) * self.timeline.day_width())
+        self.timeline_canvas.coords(item, self.timeline.date_to_x(new_start), y)
+        self.timeline_canvas.itemconfigure(item, width=((new_end - new_start).days + 1) * self.timeline.day_width())
 
     def _on_bar_release(self, event):
-        resize, self._resize = self._resize, None
-        if resize is None:
+        drag, self._drag = self._drag, None
+        if drag is None or not drag["moved"]:
+            return  # Le clic a seulement sélectionné la tâche
+        task = self.tasks.get(drag["task_id"])
+        if task is None or drag["new_start"] is None:
             return
-        task = self.tasks[resize["task_id"]]
-        if (resize["start"].isoformat(), resize["end"].isoformat()) == (task["start"], task["end"]):
+        new_start, new_end = drag["new_start"].isoformat(), drag["new_end"].isoformat()
+        if (new_start, new_end) == (task["start"], task["end"]):
             return
-        task["start"], task["end"] = resize["start"].isoformat(), resize["end"].isoformat()
+        task["start"], task["end"] = new_start, new_end
         self._save()
         # after_idle : on reconstruit la timeline après le relâchement, pas pendant
         self.gui.after_idle(self.render)
@@ -599,7 +625,10 @@ class Main_Dashboard:
                 return error.configure(text="The task needs a name.")
             if end < start:
                 return error.configure(text="The end date is before the start date.")
-            task_id = str(max((int(t) for t in self.tasks), default=0) + 1)
+            if not (dataT.is_plausible_year(start) and dataT.is_plausible_year(end)):
+                # Une faute de frappe sur l'année rendait la timeline inutilisable
+                return error.configure(text=f"Years must be between {dataT.MIN_YEAR} and {dataT.MAX_YEAR}.")
+            task_id = dataT.new_task_id(self.tasks)
             self.tasks[task_id] = {"name" : name, "start" : start.isoformat(), "end" : end.isoformat(),
                                    "color" : state["color"], "done" : False}
             self.selected = task_id

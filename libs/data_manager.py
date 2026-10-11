@@ -1,7 +1,9 @@
 import os
+import re
 import time
 import json
 import shutil
+from datetime import date
 
 # Chemins absolus (à partir du dossier du projet) : l'app marche peu importe d'où on la lance
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -10,6 +12,11 @@ DATA_FOLDER = os.path.join(BASE_DIR, "data")
 # Chaque projet est UN fichier .gantt : {"format", "name", "created", "settings", "tasks"}
 WORKSPACES_FILE = os.path.join(DATA_FOLDER, "workspaces.json")
 GANTT_FORMAT = 1
+DEFAULT_SETTINGS = {"default_view" : "Weeks"}
+DEFAULT_TASK_COLOR = "#3A86D9"
+_HEX_COLOR = re.compile(r"\A#[0-9a-fA-F]{6}\Z")   # \A et \Z, pas ^ et $ : $ laisse passer un saut de ligne final
+# Bornes d'année plausibles : au-delà, la timeline dépasse le million de pixels
+MIN_YEAR, MAX_YEAR = 1970, 2200
 INVALID_NAME_CHARS = '<>:"/\\|?*'  # Interdits dans les noms de fichiers Windows
 
 #region IO Code
@@ -120,7 +127,7 @@ def create_project(prj_name : str) -> int | None:
     if os.path.exists(path):
         return None
     project = {"format" : GANTT_FORMAT, "name" : prj_name, "created" : _now(),
-               "settings" : {"default_view" : "Weeks"}, "tasks" : {}}
+               "settings" : dict(DEFAULT_SETTINGS), "tasks" : {}}
     if not _write_json(path, project):
         return None
     prj_id = new_workspace_id()
@@ -129,15 +136,66 @@ def create_project(prj_name : str) -> int | None:
     save_workspaces(workspaces)
     return prj_id
 
+def _clean_date(value, fallback : str) -> str:
+    # Une date utilisable au format AAAA-MM-JJ, sinon fallback. Une année aberrante
+    # ("0205" au lieu de "2025") faisait dessiner une timeline de 600 000 jours.
+    try:
+        parsed = date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return fallback
+    return parsed.isoformat() if is_plausible_year(parsed) else fallback
+
+def is_plausible_year(value : date) -> bool:
+    return MIN_YEAR <= value.year <= MAX_YEAR
+
+def _clean_color(value) -> str:
+    # L'UI attend un hex #RRGGBB pour choisir la couleur du texte par-dessus.
+    # int(x, 16) acceptait "0x12345", "# 12345", "+12345" ou "12_345" : Tk les
+    # refuse ensuite (TclError), donc on vérifie chaque chiffre.
+    text = str(value)
+    return text if _HEX_COLOR.match(text) else DEFAULT_TASK_COLOR
+
+def clean_tasks(tasks) -> dict:
+    # L'UI lit task["name"], ["start"], ["end"] et ["done"] directement : une tâche
+    # incomplète (fichier .gantt modifié à la main ou tronqué) faisait planter l'affichage.
+    # On répare chaque champ manquant au lieu de refuser tout le projet.
+    if not isinstance(tasks, dict):
+        return {}
+    today = time.strftime("%Y-%m-%d")
+    cleaned = {}
+    for task_id, task in tasks.items():
+        if not isinstance(task, dict):
+            continue  # Rien de récupérable dans une entrée qui n'est pas un objet
+        name = task.get("name")
+        start = _clean_date(task.get("start"), today)
+        end = _clean_date(task.get("end"), start)
+        cleaned[str(task_id)] = {"name" : name if isinstance(name, str) and name.strip() else f"Task {task_id}",
+                                 "start" : start,
+                                 # Les dates AAAA-MM-JJ se comparent comme des textes
+                                 "end" : max(end, start),
+                                 "color" : _clean_color(task.get("color")),
+                                 "done" : bool(task.get("done"))}
+    return cleaned
+
+def new_task_id(tasks : dict) -> str:
+    # Les ids viennent du fichier : on ignore ceux qui ne sont pas des nombres au lieu de planter
+    numbers = [int(task_id) for task_id in tasks if str(task_id).isdecimal()]
+    return str(max(numbers, default=0) + 1)
+
 def read_project_file(path : str) -> dict | None:
     # Contenu d'un fichier .gantt, None s'il n'est pas valide
     data = _read_json(path, None)
-    if not isinstance(data, dict) or "name" not in data:
+    if not isinstance(data, dict):
         return None
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return None  # Sans nom utilisable, ce n'est pas un projet Ganttify
     data.setdefault("format", GANTT_FORMAT)
     data.setdefault("created", _now())
-    data.setdefault("settings", {"default_view" : "Weeks"})
-    data.setdefault("tasks", {})
+    settings = data.get("settings")
+    data["settings"] = settings if isinstance(settings, dict) else dict(DEFAULT_SETTINGS)
+    # Réparé ici une fois pour toutes : tout le reste de l'app suppose des tâches complètes
+    data["tasks"] = clean_tasks(data.get("tasks"))
     return data
 
 def load_project(prj_id : int) -> dict | None:
@@ -193,10 +251,13 @@ def migrate_old_folders():
         old_dir = os.path.join(DATA_FOLDER, str(prj_id))
         if quick_data.get("path") or not os.path.isdir(old_dir):
             continue
-        name = quick_data.get("name", f"Project {prj_id}")
+        name = str(quick_data.get("name", f"Project {prj_id}"))
+        settings = _read_json(os.path.join(old_dir, "settings.json"), dict(DEFAULT_SETTINGS))
+        # Mêmes nettoyages que read_project_file, sinon la vérification plus bas
+        # échouerait toujours et la conversion ne se ferait jamais
         project = {"format" : GANTT_FORMAT, "name" : name, "created" : quick_data.get("created", _now()),
-                   "settings" : _read_json(os.path.join(old_dir, "settings.json"), {"default_view" : "Weeks"}),
-                   "tasks" : _read_json(os.path.join(old_dir, "tasks.json"), {})}
+                   "settings" : settings if isinstance(settings, dict) else dict(DEFAULT_SETTINGS),
+                   "tasks" : clean_tasks(_read_json(os.path.join(old_dir, "tasks.json"), {}))}
         path = default_project_path(name)
         if os.path.exists(path):
             path = default_project_path(f"{name} ({prj_id})")
