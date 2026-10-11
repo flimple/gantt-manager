@@ -15,7 +15,9 @@ def load_font(font_name: str, size: int = 20, weight: str = "normal") -> ctk.CTk
     font_info = fonts[font_name]
     
     if not font_info["is_loaded"]:
-        font_path = os.path.join("assets", "fonts", font_info["file_name"])
+        # Chemin absolu : marche peu importe le dossier depuis lequel on lance l'app
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        font_path = os.path.join(base_dir, "assets", "fonts", font_info["file_name"])
         if not os.path.exists(font_path):
             return None
         ctk.FontManager.load_font(font_path)
