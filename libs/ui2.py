@@ -6,13 +6,16 @@ from libs import data_manager as dataT
 from datetime import datetime, timedelta
 import random
 
-def get_recent_projects_gui(default_view_mode : str = "Weeks") -> tuple[ctk.CTk, ctk.CTkFrame]:
+def get_recent_projects_gui(root : ctk.CTk, default_view_mode : str = "Weeks") -> tuple[ctk.CTk, ctk.CTkFrame]:
     app_data : dict = {}
 
-    app = ctk.CTk(fg_color=("#F3F5F9", "#12161C"))
+    app = root
     app.title("Ganttify - Recent Projects")
     app.geometry("650x500")
     app.resizable(False, False)
+
+    main_frame = ctk.CTkFrame(app, fg_color="transparent", bg_color="transparent")
+
 
     title_frame = ctk.CTkFrame(app, height=90, border_width=0, fg_color=("#FFFFFF", "#181D25"), bg_color="transparent")
     title_frame.pack(fill="x", pady=(0, 0))
@@ -48,16 +51,15 @@ def get_recent_projects_gui(default_view_mode : str = "Weeks") -> tuple[ctk.CTk,
 
 
 #region DashBoard GUI
-def get_dash_board_gui() -> tuple[ctk.CTk, dict]:
+def get_dash_board_gui(root : ctk.CTk) -> tuple[ctk.CTk, dict]:
     app_data : dict = {}
 
-    app = ctk.CTk(fg_color=("#F3F5F9", "#12161C"))
+    app = root
     app.title("Ganttify - Classifier les taches et gerer les roles.")
     app.minsize(1080, 720)
     app.state("zoomed")
 
     #region Header ui MAIN
-
     header = ctk.CTkFrame(app, fg_color=("#FFFFFF", "#181D25"), corner_radius=0, bg_color="transparent", height=50, border_color=("#D8DFE9", "#323B4A"), border_width=1)
     header.pack(fill="x", expand=False)
     header.pack_propagate(False)
@@ -177,8 +179,8 @@ class Main_Dashboard:
     gui : ctk.CTk
     _data : dict
 
-    def __init__(self, workspace_id : int, workspace_stats: dict):
-        self.gui, self._data = get_dash_board_gui()
+    def __init__(self, root : ctk.CTk, workspace_id : int, workspace_stats: dict):
+        self.gui, self._data = get_dash_board_gui(root)
         self._data["timeline_view_mode"].configure(command=lambda val: self.switch_view_mode(val))
         self._data["workspace_stats"].configure(text=workspace_stats["stats_str"])
         self._data["file_name"].configure(text=workspace_stats["file_name"])
@@ -227,8 +229,10 @@ class Recent_Projects_Window:
     _data : dict
     projects_data : dict
 
-    def __init__(self, workspaces : dict | None = None):
+    def __init__(self, workspaces : dict | None = None, close_window_callback = None, open_dashboard_callback = None):
         self.gui, self._data, self.recent_projects = get_recent_projects_gui()
+        self.close_window = close_window_callback
+        self.open_dashboard = open_dashboard_callback
         self.projects_data = {} if not workspaces else workspaces
         self.projects_buttons : list[ctk.CTkFrame] = []
         self._data["create_new"].configure(command=self.create_new_project)
@@ -252,12 +256,8 @@ class Recent_Projects_Window:
         create_new_popup.resizable(False, False)
 
         def confirm_creation(prj_name : str):
-            id = random.randrange(0, 10000)
-            while id in list(self.projects_data.keys()):
-                id = random.randrange(0, 10000)
-            create_ts = datetime.now()
-            dataT.save_new_workspace(id, {"name" : prj_name, "created" : create_ts})
-            new_gui = Main_Dashboard()
+            if self.open_dashboard:
+                self.open_dashboard(prj_name)
 
         els_cont = ctk.CTkFrame(create_new_popup, fg_color=("#FFFFFF", "#1C222B"))
         els_cont.pack(fill="both", expand=True, padx=10, pady=10)
@@ -304,3 +304,20 @@ class Recent_Projects_Window:
         if refresh: self.refresh_projects()
 
 
+class App_Manager:
+    def __init__(self):
+        self.root = ctk.CTk()
+        self.looping = True
+        self.holder_frame = None
+
+    def open_recent_project(self):
+        new_gui = Recent_Projects_Window(dataT.get_workspaces(), open_dashboard_callback=self.open_dashboard)
+
+    def open_dashboard(prj_id : int):
+        new_gui = Main_Dashboard()
+
+    def start_loop(self):
+        if not self.looping:
+            self.root.mainloop()
+            self.looping = True
+        

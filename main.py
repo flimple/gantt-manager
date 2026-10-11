@@ -26,8 +26,9 @@ def check_env() -> bool:
 def main2():
     if not check_env():
         return
-    root = gui.Recent_Projects_Window(dataT.get_workspaces())
-    root.start_loop()
+    app = gui.App_Manager()
+    app.open_recent_project()
+    app.start_loop()
 
 if __name__ == "__main__":
     main2()
