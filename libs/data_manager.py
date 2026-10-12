@@ -8,17 +8,13 @@ from datetime import date
 # Chemins absolus (à partir du dossier du projet) : l'app marche peu importe d'où on la lance
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_FOLDER = os.path.join(BASE_DIR, "data")
-# workspaces.json = juste la liste des projets récents : {id : {"name", "path", "created", "last_opened"}}
-# Chaque projet est UN fichier .gantt : {"format", "name", "created", "settings", "tasks"}
 WORKSPACES_FILE = os.path.join(DATA_FOLDER, "workspaces.json")
 GANTT_FORMAT = 1
 DEFAULT_SETTINGS = {"default_view" : "Weeks"}
 DEFAULT_TASK_COLOR = "#3A86D9"
-_HEX_COLOR = re.compile(r"\A#[0-9a-fA-F]{6}\Z")   # \A et \Z, pas ^ et $ : $ laisse passer un saut de ligne final
-# Bornes d'année plausibles : au-delà, la timeline dépasse le million de pixels
+_HEX_COLOR = re.compile(r"\A#[0-9a-fA-F]{6}\Z")
 MIN_YEAR, MAX_YEAR = 1970, 2200
-INVALID_NAME_CHARS = '<>:"/\\|?*'  # Interdits dans les noms de fichiers Windows
-
+INVALID_NAME_CHARS = '<>:"/\\|?*'
 #region IO Code
 
 def check_data_folder() -> bool:
@@ -30,7 +26,6 @@ def check_data_folder() -> bool:
     return True
 
 def check_workspaces_file() -> bool:
-    # Crée le fichier s'il manque, et le répare s'il est vide ou cassé (sinon get_workspaces plante)
     try:
         if os.path.exists(WORKSPACES_FILE):
             with open(WORKSPACES_FILE, "r", encoding="utf-8") as f:
@@ -41,7 +36,6 @@ def check_workspaces_file() -> bool:
                     migrate_old_folders()
                     return True
                 except json.JSONDecodeError:
-                    # Fichier cassé : on le garde de côté au lieu de perdre les données
                     os.replace(WORKSPACES_FILE, WORKSPACES_FILE + f".broken-{int(time.time())}")
         _write_json(WORKSPACES_FILE, {})
         return True
@@ -49,7 +43,6 @@ def check_workspaces_file() -> bool:
         return False
 
 def _read_json(path : str, default):
-    # Renvoie default si le fichier manque, est vide ou cassé
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -57,8 +50,6 @@ def _read_json(path : str, default):
         return default
 
 def _write_json(path : str, data) -> bool:
-    # On écrit dans un fichier temporaire puis on remplace : si l'app plante pendant
-    # l'écriture, l'ancien fichier reste intact au lieu d'être à moitié écrit
     try:
         tmp_path = path + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
@@ -77,7 +68,6 @@ def _same_path(a : str, b : str) -> bool:
 #region Projets récents (workspaces.json)
 
 def get_workspaces() -> dict:
-    # Les clés JSON sont toujours des str : on les remet en int pour le reste de l'app
     data = _read_json(WORKSPACES_FILE, {})
     return {int(prj_id) : quick_data for prj_id, quick_data in data.items()}
 
@@ -98,12 +88,64 @@ def update_workspace(prj_id : int, **changes) -> bool:
     return save_workspaces(workspaces)
 
 def remove_workspace(prj_id : int) -> bool:
-    # Enlève le projet de la liste des récents (le fichier .gantt n'est PAS supprimé)
     workspaces = get_workspaces()
     workspaces.pop(int(prj_id), None)
     return save_workspaces(workspaces)
 
 #endregion
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 #region Fichiers .gantt
@@ -122,7 +164,6 @@ def _now() -> str:
     return time.strftime("%Y-%m-%d %H:%M")
 
 def create_project(prj_name : str) -> int | None:
-    # Nouveau projet = un fichier data/<nom>.gantt + une entrée dans la liste des récents
     path = default_project_path(prj_name)
     if os.path.exists(path):
         return None
@@ -137,8 +178,6 @@ def create_project(prj_name : str) -> int | None:
     return prj_id
 
 def _clean_date(value, fallback : str) -> str:
-    # Une date utilisable au format AAAA-MM-JJ, sinon fallback. Une année aberrante
-    # ("0205" au lieu de "2025") faisait dessiner une timeline de 600 000 jours.
     try:
         parsed = date.fromisoformat(str(value))
     except (TypeError, ValueError):
@@ -149,29 +188,22 @@ def is_plausible_year(value : date) -> bool:
     return MIN_YEAR <= value.year <= MAX_YEAR
 
 def _clean_color(value) -> str:
-    # L'UI attend un hex #RRGGBB pour choisir la couleur du texte par-dessus.
-    # int(x, 16) acceptait "0x12345", "# 12345", "+12345" ou "12_345" : Tk les
-    # refuse ensuite (TclError), donc on vérifie chaque chiffre.
     text = str(value)
     return text if _HEX_COLOR.match(text) else DEFAULT_TASK_COLOR
 
 def clean_tasks(tasks) -> dict:
-    # L'UI lit task["name"], ["start"], ["end"] et ["done"] directement : une tâche
-    # incomplète (fichier .gantt modifié à la main ou tronqué) faisait planter l'affichage.
-    # On répare chaque champ manquant au lieu de refuser tout le projet.
     if not isinstance(tasks, dict):
         return {}
     today = time.strftime("%Y-%m-%d")
     cleaned = {}
     for task_id, task in tasks.items():
         if not isinstance(task, dict):
-            continue  # Rien de récupérable dans une entrée qui n'est pas un objet
+            continue
         name = task.get("name")
         start = _clean_date(task.get("start"), today)
         end = _clean_date(task.get("end"), start)
         cleaned[str(task_id)] = {"name" : name if isinstance(name, str) and name.strip() else f"Task {task_id}",
                                  "start" : start,
-                                 # Les dates AAAA-MM-JJ se comparent comme des textes
                                  "end" : max(end, start),
                                  "color" : _clean_color(task.get("color")),
                                  "done" : bool(task.get("done"))}
@@ -242,9 +274,6 @@ def compute_stats(tasks : dict) -> dict:
 #region Conversion de l'ancien format (un dossier data/<id>/ par projet)
 
 def migrate_old_folders():
-    # Ancien format : data/<id>/tasks.json + settings.json + stats.json + <nom>.gantt
-    # Nouveau : un seul fichier data/<nom>.gantt. L'ancien dossier n'est supprimé
-    # qu'APRÈS avoir vérifié que le nouveau fichier contient bien les mêmes données.
     workspaces = get_workspaces()
     changed = False
     for prj_id, quick_data in workspaces.items():
@@ -253,8 +282,6 @@ def migrate_old_folders():
             continue
         name = str(quick_data.get("name", f"Project {prj_id}"))
         settings = _read_json(os.path.join(old_dir, "settings.json"), dict(DEFAULT_SETTINGS))
-        # Mêmes nettoyages que read_project_file, sinon la vérification plus bas
-        # échouerait toujours et la conversion ne se ferait jamais
         project = {"format" : GANTT_FORMAT, "name" : name, "created" : quick_data.get("created", _now()),
                    "settings" : settings if isinstance(settings, dict) else dict(DEFAULT_SETTINGS),
                    "tasks" : clean_tasks(_read_json(os.path.join(old_dir, "tasks.json"), {}))}
@@ -262,7 +289,7 @@ def migrate_old_folders():
         if os.path.exists(path):
             path = default_project_path(f"{name} ({prj_id})")
         if not _write_json(path, project) or read_project_file(path) != project:
-            continue  # En cas de problème on ne touche à rien : l'ancien dossier reste
+            continue
         quick_data["path"] = path
         changed = True
         shutil.rmtree(old_dir, ignore_errors=True)

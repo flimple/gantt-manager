@@ -19,15 +19,13 @@ HOVER = ("#EAF1FA", "#2A3342")
 SELECTED = ("#D6E6F8", "#2F4666")
 ERROR = ("#D6455D", "#F0788A")
 SUCCESS = ("#2F9E69", "#4FC38A")
-DEFAULT_TASK_COLOR = dataT.DEFAULT_TASK_COLOR  # Une seule source de vérité
-RESIZE_EDGE = 6  # Zone (px) sur les bords d'une tâche sélectionnée pour changer ses dates
-DRAG_THRESHOLD = 5  # Pixels minimum avant qu'un clic devienne un déplacement
+DEFAULT_TASK_COLOR = dataT.DEFAULT_TASK_COLOR
+RESIZE_EDGE = 6
+DRAG_THRESHOLD = 5
 
 
 def _asset(*parts) -> str:
-    # Chemin absolu vers assets/ : l'app marche peu importe d'où on la lance
     return os.path.join(dataT.BASE_DIR, "assets", *parts)
-
 
 def _image(light : str, dark : str | None = None, size : tuple = (40, 40)) -> ctk.CTkImage:
     return ctk.CTkImage(light_image=Image.open(_asset(light)),
@@ -35,20 +33,16 @@ def _image(light : str, dark : str | None = None, size : tuple = (40, 40)) -> ct
 
 
 def _popup(root, title : str, size : str) -> ctk.CTkToplevel:
-    # Petite fenêtre au-dessus de la fenêtre principale
     popup = ctk.CTkToplevel(root, fg_color=("#F3F5F9", "#12161C"))
     popup.title(title)
     popup.geometry(size)
     popup.resizable(False, False)
     popup.transient(root)
-    # CTkToplevel s'affiche parfois derrière : on le remet devant une fois créé
     popup.after(150, lambda: (popup.lift(), popup.focus_force()))
     return popup
 
 
 def choose_project_file(parent) -> int | None:
-    # Choisir un fichier .gantt (n'importe où sur le PC) ; il est ajouté aux projets récents ; renvoie son id
-    # Utilisé par l'écran des projets ET par le dashboard ("Open Project...")
     path = filedialog.askopenfilename(parent=parent, title="Open Project", initialdir=dataT.DATA_FOLDER,
                                       filetypes=[("Ganttify project", "*.gantt")])
     if not path:
@@ -235,19 +229,16 @@ class Main_Dashboard:
 
     def __init__(self, root : ctk.CTk, workspace_id : int, on_close_project=None, on_open_project=None):
         self.workspace_id = workspace_id
-        self.on_close_project = on_close_project  # Retour à l'écran des projets récents
-        self.on_open_project = on_open_project    # on_open_project(prj_id) : ouvrir un autre projet
-        # Tout le projet vient de son fichier .gantt : {"name", "created", "settings", "tasks"}
+        self.on_close_project = on_close_project
+        self.on_open_project = on_open_project
         self.project = dataT.load_project(workspace_id) or {"name" : f"Project {workspace_id}", "settings" : {}, "tasks" : {}}
         self.path = dataT.project_path(workspace_id) or ""
-        self.workspace = self.project  # Nom et date de création
-        # tasks : {task_id (str) : {"name", "start", "end" (AAAA-MM-JJ), "color", "done"}}
-        # Mêmes dicts que dans self.project : les modifier puis save_project() suffit
+        self.workspace = self.project
         self.tasks, self.settings = self.project["tasks"], self.project["settings"]
         self.selected = None
-        self.bars = {}          # task_id -> (widget, canvas_item) sur la timeline
-        self._range = None      # (début, fin) affichés par la timeline
-        self._drag = None       # Geste en cours sur une barre : déplacement ou étirement (None sinon)
+        self.bars = {}          
+        self._range = None
+        self._drag = None
         self._theme = ctk.get_appearance_mode()
 
         self.gui, self._data = get_dash_board_gui(root)
@@ -271,16 +262,13 @@ class Main_Dashboard:
         view = self.settings.get("default_view", "Weeks")
         self._data["timeline_view_mode"].set(view)
         self.switch_view_mode(view, render=False)
-        self.switch_main_panel(0)  # La timeline est affichée par défaut (avant : le centre était vide)
+        self.switch_main_panel(0)  
         self.render()
         self._watch_theme()
 
     def start_loop(self):
-        # Ctk a des processus pour gerer les themes etc avant la loop donc on attend pour appliquer le mode zoomed
         self.gui.after(10, lambda: self.gui.state("zoomed"))
         self.gui.mainloop()
-
-    # ---------- Vues ----------
 
     def switch_view_mode(self, view_mode : str = "Weeks", render : bool = True):
         self.timeline.set_view(view_mode=view_mode)
@@ -296,21 +284,17 @@ class Main_Dashboard:
         if not 0 <= main_panel_id < len(panels):
             print("error in main panel id parsed")
             return
-        # Chaque panneau est une liste (frame, pack_data, ...) : timeline, to-do et calendrier n'ont pas la même taille
         for index, (panel, button) in enumerate(panels):
             frame, pack_data = panel[0], panel[1]
             if index == main_panel_id:
-                # before= : le panneau reste entre la barre de gauche et les détails à droite
                 frame.pack(**pack_data, before=self._data["task_details"])
                 button.configure(fg_color=SELECTED)
             else:
                 frame.pack_forget()
                 button.configure(fg_color="transparent")
 
-    # ---------- Affichage des tâches ----------
-
+    #region Extra
     def _visible_tasks(self) -> list:
-        # Tâches qui correspondent à la recherche, triées par date de début
         query = self._data["search_var"].get().strip().lower()
         items = sorted(self.tasks.items(), key=lambda kv: (kv[1]["start"], kv[1]["name"].lower()))
         return [(task_id, task) for task_id, task in items if query in task["name"].lower()]
@@ -332,7 +316,6 @@ class Main_Dashboard:
             widget.destroy()
         self.bars = {}
 
-        # Plage de dates : englobe toutes les tâches (on ne la change que si besoin, pour garder le scroll)
         if self.tasks:
             first = min(date.fromisoformat(t["start"]) for t in self.tasks.values())
             last = max(date.fromisoformat(t["end"]) for t in self.tasks.values())
@@ -342,14 +325,12 @@ class Main_Dashboard:
                 self._range = wanted
                 self.timeline.set_view(start_date=wanted[0], end_date=wanted[1])
         elif self._range is not None:
-            # Plus aucune tâche : on revient à la fenêtre par défaut au lieu de garder l'ancienne
             self._range = None
             default_start, default_end = self.timeline.default_range()
             self.timeline.set_view(start_date=default_start, end_date=default_end)
 
         row_height = self.timeline.row_height
         for task_id, task in visible:
-            # Une ligne par tâche dans la colonne des noms (tk et pas CTk : hauteur exacte en pixels)
             row = tk.Frame(self.timeline_names, height=row_height, bg=colors["panel"])
             row.pack(fill="x")
             row.pack_propagate(False)
@@ -361,7 +342,6 @@ class Main_Dashboard:
             color = task.get("color", DEFAULT_TASK_COLOR)
             bar = tk.Label(self.timeline_canvas, text=task["name"], anchor="w", padx=6, bg=color,
                            fg=uiTool._text_on(color), font=("Segoe UI", 9), cursor="hand2")
-            # Clic = sélectionner ; sur une tâche déjà sélectionnée, tirer un bord = changer ses dates
             bar.bind("<ButtonPress-1>", lambda e, tid=task_id: self._on_bar_press(e, tid))
             bar.bind("<B1-Motion>", self._on_bar_drag)
             bar.bind("<ButtonRelease-1>", self._on_bar_release)
@@ -371,7 +351,6 @@ class Main_Dashboard:
         self._place_bars()
 
     def _place_bars(self):
-        # Position des barres selon le mode de vue (la largeur d'un jour change entre Days/Weeks/Months)
         row_height, day_width = self.timeline.row_height, self.timeline.day_width()
         for index, (task_id, _) in enumerate(self._visible_tasks()):
             if task_id not in self.bars:
@@ -392,7 +371,6 @@ class Main_Dashboard:
                                on_toggle=lambda text, done, tid=task_id: self.set_done(tid, done))
 
     def _render_calendar(self, visible):
-        # La tâche apparaît sur chaque jour qu'elle couvre (limité à 62 jours pour rester lisible)
         events = []
         for _, task in visible:
             start, end = date.fromisoformat(task["start"]), date.fromisoformat(task["end"])
@@ -412,10 +390,6 @@ class Main_Dashboard:
             self._theme = ctk.get_appearance_mode()
             self.render()
         self.gui.after(300, self._watch_theme)
-
-    # ---------- Sélection et détails ----------
-
-    # ---------- Déplacer une tâche sur sa ligne, ou l'étirer par ses bords ----------
 
     def _bar_edge(self, task_id, x_root : int):
         # "left" / "right" si la souris est sur un bord de la tâche sélectionnée, sinon None
@@ -556,8 +530,7 @@ class Main_Dashboard:
                       text_color=ERROR, hover_color=HOVER, corner_radius=8,
                       command=self.delete_selected).pack(fill="x")
 
-    # ---------- Modifications (sauvegardées tout de suite) ----------
-
+    
     def _save(self):
         # Tout le projet est réécrit dans son fichier .gantt (tâches + réglages)
         dataT.save_project(self.workspace_id, self.project)
@@ -683,7 +656,7 @@ class Main_Dashboard:
         if prj_id is not None and self.on_open_project:
             self.gui.unbind("<Control-o>")
             self.on_open_project(prj_id)
-
+    #endregion
 
 class Recent_Projects_Window:
     recent_projects : ctk.CTkFrame
@@ -782,7 +755,7 @@ class Recent_Projects_Window:
         create_new_popup.after(200, name_entry.focus_set)
 
     def find_existing(self):
-        self.gui.attributes("-topmost", False)  # Sinon la fenêtre cache le sélecteur de fichier
+        self.gui.attributes("-topmost", False)
         prj_id = choose_project_file(self.gui)
         self.gui.attributes("-topmost", True)
         if prj_id is not None:
