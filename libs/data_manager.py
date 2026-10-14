@@ -1,10 +1,20 @@
 import os
+import re
 import time
 import json
+import shutil
+from datetime import date
 
-DATA_FOLDER="data/"
-WORKSPACES_FILE="data/workspaces.json"
-
+# Chemins absolus (à partir du dossier du projet) : l'app marche peu importe d'où on la lance
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_FOLDER = os.path.join(BASE_DIR, "data")
+WORKSPACES_FILE = os.path.join(DATA_FOLDER, "workspaces.json")
+GANTT_FORMAT = 1
+DEFAULT_SETTINGS = {"default_view" : "Weeks"}
+DEFAULT_TASK_COLOR = "#3A86D9"
+_HEX_COLOR = re.compile(r"\A#[0-9a-fA-F]{6}\Z")
+MIN_YEAR, MAX_YEAR = 1970, 2200
+INVALID_NAME_CHARS = '<>:"/\\|?*'
 #region IO Code
 
 def check_data_folder() -> bool:
@@ -16,56 +26,274 @@ def check_data_folder() -> bool:
     return True
 
 def check_workspaces_file() -> bool:
-    if not os.path.exists(WORKSPACES_FILE):
-        try:
-            with open(WORKSPACES_FILE, "w") as f:
-                json.dump({}, f)
-        except Exception:
-            return False
-    return True
-
-#endregion
-
-
-#region Data stream
-
-def get_workspaces() -> dict | None:
-    with open(WORKSPACES_FILE, "r") as f:
-        return json.load(f)
-    return None
-
-def save_workspaces(workspaces : dict) -> bool:
     try:
-        with open(WORKSPACES_FILE, "w") as f:
-            json.dump(workspaces, f)
+        if os.path.exists(WORKSPACES_FILE):
+            with open(WORKSPACES_FILE, "r", encoding="utf-8") as f:
+                content = f.read()
+            if content.strip():
+                try:
+                    json.loads(content)
+                    migrate_old_folders()
+                    return True
+                except json.JSONDecodeError:
+                    os.replace(WORKSPACES_FILE, WORKSPACES_FILE + f".broken-{int(time.time())}")
+        _write_json(WORKSPACES_FILE, {})
         return True
     except Exception:
         return False
 
-def get_workspace(prj_id : int) -> dict:
-    pass
-
-
-def save_new_workspace_data(prj_id : int):
-    WORKSPACE_DIR = DATA_FOLDER + f"{prj_id}/"
-    if not os.path.exists(WORKSPACE_DIR):
-        os.mkdir(WORKSPACE_DIR)
-    pths = [WORKSPACE_DIR + "tasks.json",  WORKSPACE_DIR + "settings.json", WORKSPACE_DIR + "stats.json"]
-    for pth in pths:
-        with open(pth, "w") as f:
-            json.dump({}, f)
-    
-
-def save_new_workspace(prj_id : int, quick_data : dict) -> bool:
+def _read_json(path : str, default):
     try:
-        data = {}
-        with open(WORKSPACES_FILE, "r") as f:
-            data = json.load(f)
-        data[prj_id] = quick_data
-        with open(WORKSPACES_FILE, "w"):
-            json.dump(data, f)
-            return True
-    except Exception:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return default
+
+def _write_json(path : str, data) -> bool:
+    try:
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, path)
+        return True
+    except OSError:
         return False
+
+def _same_path(a : str, b : str) -> bool:
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+#endregion
+
+
+#region Projets récents (workspaces.json)
+
+def get_workspaces() -> dict:
+    data = _read_json(WORKSPACES_FILE, {})
+    return {int(prj_id) : quick_data for prj_id, quick_data in data.items()}
+
+def save_workspaces(workspaces : dict) -> bool:
+    return _write_json(WORKSPACES_FILE, {str(prj_id) : quick_data for prj_id, quick_data in workspaces.items()})
+
+def get_workspace(prj_id : int) -> dict | None:
+    return get_workspaces().get(int(prj_id))
+
+def new_workspace_id() -> int:
+    return max(get_workspaces().keys(), default=0) + 1
+
+def update_workspace(prj_id : int, **changes) -> bool:
+    workspaces = get_workspaces()
+    if int(prj_id) not in workspaces:
+        return False
+    workspaces[int(prj_id)].update(changes)
+    return save_workspaces(workspaces)
+
+def remove_workspace(prj_id : int) -> bool:
+    workspaces = get_workspaces()
+    workspaces.pop(int(prj_id), None)
+    return save_workspaces(workspaces)
+
+#endregion
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#region Fichiers .gantt
+
+def is_valid_project_name(name : str) -> bool:
+    return not any(c in INVALID_NAME_CHARS for c in name)
+
+def default_project_path(prj_name : str) -> str:
+    return os.path.join(DATA_FOLDER, f"{prj_name}.gantt")
+
+def project_path(prj_id : int) -> str | None:
+    quick_data = get_workspace(prj_id)
+    return quick_data.get("path") if quick_data else None
+
+def _now() -> str:
+    return time.strftime("%Y-%m-%d %H:%M")
+
+def create_project(prj_name : str) -> int | None:
+    path = default_project_path(prj_name)
+    if os.path.exists(path):
+        return None
+    project = {"format" : GANTT_FORMAT, "name" : prj_name, "created" : _now(),
+               "settings" : dict(DEFAULT_SETTINGS), "tasks" : {}}
+    if not _write_json(path, project):
+        return None
+    prj_id = new_workspace_id()
+    workspaces = get_workspaces()
+    workspaces[prj_id] = {"name" : prj_name, "path" : path, "created" : project["created"], "last_opened" : _now()}
+    save_workspaces(workspaces)
+    return prj_id
+
+def _clean_date(value, fallback : str) -> str:
+    try:
+        parsed = date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return fallback
+    return parsed.isoformat() if is_plausible_year(parsed) else fallback
+
+def is_plausible_year(value : date) -> bool:
+    return MIN_YEAR <= value.year <= MAX_YEAR
+
+def _clean_color(value) -> str:
+    text = str(value)
+    return text if _HEX_COLOR.match(text) else DEFAULT_TASK_COLOR
+
+def clean_tasks(tasks) -> dict:
+    if not isinstance(tasks, dict):
+        return {}
+    today = time.strftime("%Y-%m-%d")
+    cleaned = {}
+    for task_id, task in tasks.items():
+        if not isinstance(task, dict):
+            continue
+        name = task.get("name")
+        start = _clean_date(task.get("start"), today)
+        end = _clean_date(task.get("end"), start)
+        cleaned[str(task_id)] = {"name" : name if isinstance(name, str) and name.strip() else f"Task {task_id}",
+                                 "start" : start,
+                                 "end" : max(end, start),
+                                 "color" : _clean_color(task.get("color")),
+                                 "done" : bool(task.get("done"))}
+    return cleaned
+
+def new_task_id(tasks : dict) -> str:
+    # Les ids viennent du fichier : on ignore ceux qui ne sont pas des nombres au lieu de planter
+    numbers = [int(task_id) for task_id in tasks if str(task_id).isdecimal()]
+    return str(max(numbers, default=0) + 1)
+
+def read_project_file(path : str) -> dict | None:
+    # Contenu d'un fichier .gantt, None s'il n'est pas valide
+    data = _read_json(path, None)
+    if not isinstance(data, dict):
+        return None
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return None  # Sans nom utilisable, ce n'est pas un projet Ganttify
+    data.setdefault("format", GANTT_FORMAT)
+    data.setdefault("created", _now())
+    settings = data.get("settings")
+    data["settings"] = settings if isinstance(settings, dict) else dict(DEFAULT_SETTINGS)
+    # Réparé ici une fois pour toutes : tout le reste de l'app suppose des tâches complètes
+    data["tasks"] = clean_tasks(data.get("tasks"))
+    return data
+
+def load_project(prj_id : int) -> dict | None:
+    path = project_path(prj_id)
+    return read_project_file(path) if path else None
+
+def save_project(prj_id : int, project : dict) -> bool:
+    path = project_path(prj_id)
+    return bool(path) and _write_json(path, project)
+
+def register_project_file(path : str) -> int | None:
+    # "Open Project" : ajoute un .gantt (n'importe où sur le PC) à la liste des récents ; renvoie son id
+    project = read_project_file(path)
+    if project is None:
+        return None
+    workspaces = get_workspaces()
+    for prj_id, quick_data in workspaces.items():
+        if quick_data.get("path") and _same_path(quick_data["path"], path):
+            update_workspace(prj_id, name=project["name"], last_opened=_now())
+            return prj_id
+    prj_id = new_workspace_id()
+    workspaces[prj_id] = {"name" : project["name"], "path" : os.path.abspath(path),
+                          "created" : project["created"], "last_opened" : _now()}
+    save_workspaces(workspaces)
+    return prj_id
+
+def is_name_taken(prj_name : str) -> bool:
+    names = [w["name"].lower() for w in get_workspaces().values()]
+    return prj_name.lower() in names or os.path.exists(default_project_path(prj_name))
+
+def compute_stats(tasks : dict) -> dict:
+    # tasks : {task_id : {"name", "start", "end" (AAAA-MM-JJ), "color", "done"}}
+    today = time.strftime("%Y-%m-%d")
+    total = len(tasks)
+    done = sum(1 for t in tasks.values() if t.get("done"))
+    # Les dates AAAA-MM-JJ se comparent correctement comme des textes
+    late = sum(1 for t in tasks.values() if not t.get("done") and t.get("end", today) < today)
+    return {"total_tasks" : total, "total_completed" : done, "late_tasks" : late,
+            "stats_str" : f"{total} tasks • {done} done • {late} late"}
+
+#endregion
+
+
+#region Conversion de l'ancien format (un dossier data/<id>/ par projet)
+
+def migrate_old_folders():
+    workspaces = get_workspaces()
+    changed = False
+    for prj_id, quick_data in workspaces.items():
+        old_dir = os.path.join(DATA_FOLDER, str(prj_id))
+        if quick_data.get("path") or not os.path.isdir(old_dir):
+            continue
+        name = str(quick_data.get("name", f"Project {prj_id}"))
+        settings = _read_json(os.path.join(old_dir, "settings.json"), dict(DEFAULT_SETTINGS))
+        project = {"format" : GANTT_FORMAT, "name" : name, "created" : quick_data.get("created", _now()),
+                   "settings" : settings if isinstance(settings, dict) else dict(DEFAULT_SETTINGS),
+                   "tasks" : clean_tasks(_read_json(os.path.join(old_dir, "tasks.json"), {}))}
+        path = default_project_path(name)
+        if os.path.exists(path):
+            path = default_project_path(f"{name} ({prj_id})")
+        if not _write_json(path, project) or read_project_file(path) != project:
+            continue
+        quick_data["path"] = path
+        changed = True
+        shutil.rmtree(old_dir, ignore_errors=True)
+    if changed:
+        save_workspaces(workspaces)
 
 #endregion

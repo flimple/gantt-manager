@@ -12,6 +12,56 @@ def resolve_bg(widget):
         w = w.master
     return "#000000"
 
+
+# ── Molette : une seule liaison <MouseWheel> pour toute l'application ──────
+# bind_all vise le tag "all" (toute l'application) : détruire un widget ne retire
+# PAS son handler. Une liaison par panneau s'accumulait donc à chaque projet
+# ouvert. On garde une seule liaison et une liste de zones inscrites, purgée des
+# widgets détruits à chaque inscription et à chaque coup de molette.
+_WHEEL_ZONES : list = []
+_WHEEL_ROOT : list = [None]
+
+
+def _prune_wheel_zones():
+    kept = []
+    for zone in _WHEEL_ZONES:
+        try:
+            if zone[0].winfo_exists():
+                kept.append(zone)
+        except Exception:
+            pass
+    _WHEEL_ZONES[:] = kept
+
+
+def _dispatch_wheel(event):
+    # Sous Windows <MouseWheel> va au widget qui a le focus, pas à celui sous la
+    # souris : c'est donc le pointeur qui désigne la zone à faire défiler. Si
+    # plusieurs zones sont imbriquées, la plus profonde gagne.
+    _prune_wheel_zones()
+    try:
+        pointed = _WHEEL_ROOT[0].winfo_containing(event.x_root, event.y_root)
+    except Exception:
+        return
+    if pointed is None:
+        return
+    target, best = str(pointed), None
+    for container, handler in _WHEEL_ZONES:
+        name = str(container)
+        if (target == name or target.startswith(name + ".")) and (best is None or len(name) > len(best[0])):
+            best = (name, handler)
+    if best is not None:
+        best[1](event)
+
+
+def _register_wheel(container, handler):
+    """handler(event) est appelé quand la molette tourne et que le pointeur est dans container."""
+    _prune_wheel_zones()
+    _WHEEL_ZONES.append((container, handler))
+    root = container.winfo_toplevel()
+    if _WHEEL_ROOT[0] is not root:
+        _WHEEL_ROOT[0] = root
+        root.bind_all("<MouseWheel>", _dispatch_wheel)   # sans add="+" : remplace l'ancienne
+
 def create_viewport(parent_frame, horizontal: bool = False) -> ctk.CTkFrame:
     container = ctk.CTkFrame(parent_frame, fg_color="transparent")
     container.pack(fill="both", expand=True)
@@ -44,16 +94,7 @@ def create_viewport(parent_frame, horizontal: bool = False) -> ctk.CTkFrame:
     scrollable_frame.bind("<Configure>", _fit)
     canvas.bind("<Configure>", _fit)
 
-    def _pointer_inside():
-        try:
-            w = container.winfo_containing(*container.winfo_pointerxy())
-        except Exception:
-            return False
-        return w is not None and str(w).startswith(str(container))
-
     def _on_wheel(e):
-        if not _pointer_inside():
-            return
         step = int(-e.delta / 120) * 2
         shift_held = bool(e.state & 0x1)
         if horizontal and shift_held:
@@ -62,7 +103,7 @@ def create_viewport(parent_frame, horizontal: bool = False) -> ctk.CTkFrame:
         elif canvas.yview() != (0.0, 1.0):
             canvas.yview_scroll(step, "units")
 
-    canvas.bind_all("<MouseWheel>", _on_wheel, add="+")
+    _register_wheel(container, _on_wheel)
 
     return scrollable_frame
 
@@ -98,6 +139,7 @@ _TL_PAL = {
     "margin":  ("#E9A3AE", "#8A4553"),   # notebook margin line
 }
 _TL_MODES = {"Days": 48, "Weeks": 18, "Months": 5}   # pixels per day for each view
+_TL_DEFAULT_DAYS = 89   # default window: the current week + 90 days
 _TL_FONT = "Segoe UI"
 _WD = ("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
  
@@ -145,11 +187,13 @@ def get_timeline_table(parent, start_date: date | None = None, end_date: date | 
       set_view(view_mode=None, start_date=None, end_date=None)   change view / range and redraw
       date_to_x(date), row_to_y(row_index), day_width()          positions for placing nodes
       scroll_to_date(date)                                       horizontal scroll
+      start_date(), default_range()                              range shown now / the default one
       row_height                                                 the row height in pixels
     """
     today = date.today()
     first = start_date or today - timedelta(days=today.weekday())
-    state = {"start": first, "end": end_date or first + timedelta(days=89), "mode": _tl_mode(view_mode)}
+    state = {"start": first, "end": end_date or first + timedelta(days=_TL_DEFAULT_DAYS),
+             "mode": _tl_mode(view_mode)}
  
     # side="left" + expand: sits between a left panel and a right panel packed with side="left"/"right"
     pack_data = {"side": "left", "fill": "both", "expand": True, "padx": padding, "pady": padding}
@@ -320,24 +364,15 @@ def get_timeline_table(parent, start_date: date | None = None, end_date: date | 
     container.after(300, _watch)
  
     # ── mouse wheel: scroll when the pointer is over the table (Shift = horizontal) ──
-    def _inside():
-        try:
-            w = container.winfo_containing(*container.winfo_pointerxy())
-        except Exception:
-            return False
-        return w is not None and (str(w) == str(container) or str(w).startswith(str(container) + "."))
- 
     def _wheel(e):
-        if not _inside():
-            return
         step = int(-e.delta / 120) * 2
         if e.state & 0x1:
             if tasks.xview() != (0.0, 1.0):
                 _xview("scroll", step, "units")
         elif tasks.yview() != (0.0, 1.0):
             _yview("scroll", step, "units")
- 
-    tasks.bind_all("<MouseWheel>", _wheel, add="+")
+
+    _register_wheel(container, _wheel)
  
     # ── helpers for the main script ──────────────────────────
     def set_view(view_mode=None, start_date=None, end_date=None):
@@ -354,7 +389,14 @@ def get_timeline_table(parent, start_date: date | None = None, end_date: date | 
         total = max((state["end"] - state["start"]).days + 1, 1) * _TL_MODES[state["mode"]]
         _xview("moveto", max(0.0, ((d - state["start"]).days * _TL_MODES[state["mode"]] - 60) / total))
  
+    def default_range():
+        # The window the table starts with, so a caller can go back to it
+        monday = date.today() - timedelta(days=date.today().weekday())
+        return monday, monday + timedelta(days=_TL_DEFAULT_DAYS)
+
     container.set_view = set_view
+    container.start_date = lambda: state["start"]
+    container.default_range = default_range
     container.date_to_x = lambda d: (d - state["start"]).days * _TL_MODES[state["mode"]]
     container.row_to_y = lambda i: i * row_height
     container.day_width = lambda: _TL_MODES[state["mode"]]
@@ -413,17 +455,10 @@ def _watch_theme(widget, redraw):
  
  
 def _bind_wheel(container, cv):
-    def inside():
-        try:
-            w = container.winfo_containing(*container.winfo_pointerxy())
-        except Exception:
-            return False
-        return w is not None and (str(w) == str(container) or str(w).startswith(str(container) + "."))
- 
     def wheel(e):
-        if inside() and cv.yview() != (0.0, 1.0):
+        if cv.yview() != (0.0, 1.0):
             cv.yview_scroll(int(-e.delta / 120) * 2, "units")
-    cv.bind_all("<MouseWheel>", wheel, add="+")
+    _register_wheel(container, wheel)
  
  
 def _pick(color, i: int) -> str:
